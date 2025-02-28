@@ -1,0 +1,371 @@
+2025-02-28 08:34:20,415 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 08:34:20,464 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+2025-02-28 08:34:20,465 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 127, in validate_contracts_config
+    validate_entity_config(contracts['entity_separation'])
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: validate_entity_config() missing 1 required positional argument: 'config'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 358, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 139, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 369, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+2025-02-28 08:44:35,473 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 08:44:35,519 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+2025-02-28 08:44:35,519 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 127, in validate_contracts_config
+    validate_entity_config(contracts['entity_separation'])
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: validate_entity_config() missing 1 required positional argument: 'config'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 358, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 139, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 369, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+2025-02-28 08:48:55,064 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 08:48:55,102 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+2025-02-28 08:48:55,103 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 127, in validate_contracts_config
+    validate_entity_config(contracts['entity_separation'])
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: validate_entity_config() missing 1 required positional argument: 'config'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 358, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 139, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 369, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: validate_entity_config() missing 1 required positional argument: 'config'
+2025-02-28 09:02:14,211 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:02:14,253 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+2025-02-28 09:02:14,253 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 429, in validate_entity_config
+    raise ValueError(f"Key fields missing from field_mappings: {', '.join(missing_keys)}")
+ValueError: Key fields missing from field_mappings: contract_transaction_unique_key
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 372, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 383, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+2025-02-28 09:08:34,856 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:08:34,903 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+2025-02-28 09:08:34,904 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 413, in validate_entity_config
+    raise ValueError(f"Key fields missing from field_mappings: {', '.join(missing_keys)}")
+ValueError: Key fields missing from field_mappings: contract_transaction_unique_key
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 356, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 367, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+2025-02-28 09:08:58,183 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:08:58,226 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+2025-02-28 09:08:58,226 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 417, in validate_entity_config
+    raise ValueError(f"Key fields missing from field_mappings: {', '.join(missing_keys)}")
+ValueError: Key fields missing from field_mappings: contract_transaction_unique_key
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 360, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 371, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+2025-02-28 09:14:50,174 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:14:50,216 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+2025-02-28 09:14:50,217 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 417, in validate_entity_config
+    raise ValueError(f"Key fields missing from field_mappings: {', '.join(missing_keys)}")
+ValueError: Key fields missing from field_mappings: contract_transaction_unique_key
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 360, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 371, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_transaction_unique_key
+2025-02-28 09:29:32,243 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:29:32,282 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_award_unique_key, award_id_piid
+2025-02-28 09:29:32,283 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 417, in validate_entity_config
+    raise ValueError(f"Key fields missing from field_mappings: {', '.join(missing_keys)}")
+ValueError: Key fields missing from field_mappings: contract_award_unique_key, award_id_piid
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 360, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key fields missing from field_mappings: contract_award_unique_key, award_id_piid
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 371, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key fields missing from field_mappings: contract_award_unique_key, award_id_piid
+2025-02-28 09:35:33,530 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:35:33,576 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:35:33,576 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 453, in validate_entity_config
+    raise ValueError(f"Key field '{key_field}' missing from field_mappings and not referenced as a source")
+ValueError: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 378, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 389, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:36:22,787 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:36:22,825 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:36:22,826 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 453, in validate_entity_config
+    raise ValueError(f"Key field '{key_field}' missing from field_mappings and not referenced as a source")
+ValueError: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 378, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 389, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:36:36,282 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:36:36,325 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:36:36,326 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 453, in validate_entity_config
+    raise ValueError(f"Key field '{key_field}' missing from field_mappings and not referenced as a source")
+ValueError: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 378, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 389, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:41:33,821 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:41:33,862 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:41:33,862 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 470, in validate_entity_config
+    raise ValueError(f"Key field '{key_field}' missing from field_mappings and not referenced as a source")
+ValueError: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 395, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 406, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:44:22,448 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 09:44:22,486 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 09:44:22,487 - DEBUG - process_transactions:45 - main - Configuration error details:
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 141, in validate_contracts_config
+    validate_entity_config(entity_type, config)
+    ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 470, in validate_entity_config
+    raise ValueError(f"Key field '{key_field}' missing from field_mappings and not referenced as a source")
+ValueError: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 395, in load_config
+    validate_contracts_config(config)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 153, in validate_contracts_config
+    raise ValueError(f"Invalid configuration: {str(e)}")
+ValueError: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\VS Code Projects\USASpending\process_transactions.py", line 41, in main
+    config = load_config(config_file)
+  File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 406, in load_config
+    raise ValueError(f"Error loading configuration: {str(e)}")
+ValueError: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source

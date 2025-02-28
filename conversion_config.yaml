@@ -95,6 +95,7 @@ contracts:
         key_fields:
           - contract_transaction_unique_key
         field_mappings:
+          contract_transaction_unique_key: contract_transaction_unique_key  # Add direct mapping
           transaction_key: contract_transaction_unique_key
           action_date: action_date
           action_type: action_type
@@ -163,6 +164,10 @@ contracts:
           - contract_award_unique_key
           - award_id_piid
         field_mappings:
+          # Direct mappings for key fields
+          contract_award_unique_key: contract_award_unique_key
+          award_id_piid: award_id_piid
+          # Existing mappings
           award_id: contract_award_unique_key
           piid: award_id_piid
           parent_piid: parent_award_id_piid

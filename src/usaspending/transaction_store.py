@@ -1,131 +1,123 @@
 """Transaction data store implementation."""
-from typing import Dict, Any, Optional, Tuple, Set
+from typing import Dict, Any, Optional, Set, cast
 import logging
 from .entity_store import EntityStore
-from .types import ContractData, TransactionEntity
+from .types import TransactionStats
 
 logger = logging.getLogger(__name__)
 
 class TransactionStore(EntityStore):
-    """Manages storage for transaction data with relationship tracking."""
+    """Manages transaction data storage and tracks modification sequences."""
 
     def __init__(self, base_path: str, entity_type: str, config: Dict[str, Any]) -> None:
         super().__init__(base_path, entity_type, config)
-        self.parent_agency_refs: Dict[str, Tuple[str, str]] = {}
-        self.award_refs: Dict[str, Dict[str, Any]] = {}
-        self.modification_sequence: Dict[str, Set[str]] = {}
+        # Only keep specialized tracking
+        self.award_refs: Dict[str, Dict[str, Any]] = {}  # award_id -> award metadata
 
     def add_entity(self, entity_data: Optional[Dict[str, Any]]) -> Optional[str]:
-        """Add transaction with relationship tracking."""
+        """Add transaction with modification sequence tracking."""
         if not entity_data:
-            self.stats.skipped["invalid_data"] += 1
             return None
 
-        # Track total records
-        self.stats.total += 1
+        transaction_key = cast(str, super().add_entity(entity_data))
+        if not transaction_key:
+            return None
 
-        # Generate key from transaction unique key
-        transaction_id = str(entity_data.get('contract_transaction_unique_key'))
+        # Track specialized award data
         award_id = str(entity_data.get('contract_award_unique_key'))
-        piid = str(entity_data.get('award_id_piid'))
+        if award_id:
+            if award_id not in self.award_refs:
+                self.award_refs[award_id] = {
+                    "modification_number": entity_data.get("modification_number"),
+                    "action_date": entity_data.get("action_date"),
+                    "piid": entity_data.get("award_id_piid")
+                }
 
-        # Validate required fields
-        if not all([transaction_id, award_id, piid]):
-            self.stats.skipped["missing_key_fields"] += 1
-            return None
+            # Add relationships
+            if entity_data.get("modification_number") == "0":
+                # Base transaction creates award
+                self.relationship_manager.add_relationship(
+                    transaction_key,
+                    "CREATES",
+                    award_id
+                )
+            else:
+                # Modification references award
+                self.relationship_manager.add_relationship(
+                    transaction_key,
+                    "MODIFIES",
+                    award_id,
+                    "MODIFIED_BY"
+                )
 
-        # Add or update in cache
-        if transaction_id not in self.cache:
-            self.cache[transaction_id] = entity_data
-            self.stats.unique += 1
-            logger.debug(f"Transaction: Added new transaction {transaction_id}")
-        else:
-            # Update existing transaction while preserving relationships
-            existing_data = self.cache[transaction_id]
-            existing_data.update(entity_data)
-            logger.debug(f"Transaction: Updated existing transaction {transaction_id}")
+            # Add relationship to previous modification if exists
+            if prev_mods := self.get_previous_modifications(award_id, entity_data.get("modification_number")):
+                for prev_mod in prev_mods:
+                    self.relationship_manager.add_relationship(
+                        transaction_key,
+                        "REFERENCES",
+                        prev_mod
+                    )
 
-        # Track contract award relationships
-        if award_id not in self.award_refs:
-            self.award_refs[award_id] = {
-                "modification_number": entity_data.get("modification_number"),
-                "action_date": entity_data.get("action_date"),
-                "transactions": set(),
-                "piid": piid
-            }
-            logger.debug(f"Transaction: Created new award reference for {award_id}")
+        return transaction_key
+
+    def get_previous_modifications(self, award_id: str, current_mod: str) -> Set[str]:
+        """Get previous modifications for an award."""
+        if not current_mod or current_mod == "0":
+            return set()
+
+        # Find transactions that modify this award
+        award_mods = self.relationship_manager.get_related_entities(award_id, "MODIFIED_BY")
         
-        self.award_refs[award_id]["transactions"].add(transaction_id)
+        # Filter to get only previous modifications
+        prev_mods = set()
+        for mod_id in award_mods:
+            mod_data = self.cache.cache.get(mod_id, {})
+            mod_num = mod_data.get("modification_number", "")
+            if mod_num and mod_num < current_mod:
+                prev_mods.add(mod_id)
         
-        # Track modification sequence
-        if award_id not in self.modification_sequence:
-            self.modification_sequence[award_id] = set()
-            
-        self.modification_sequence[award_id].add(transaction_id)
-
-        return transaction_id
-
-    def update_parent_agency_reference(self, transaction_key: str, level: str, agency_id: str) -> None:
-        """Update transaction's parent agency reference after resolution."""
-        if transaction_key not in self.cache:
-            logger.debug(f"Transaction: Cannot update parent agency ref - transaction {transaction_key} not found")
-            return
-            
-        # Store the parent agency reference for this transaction
-        if transaction_key not in self.parent_agency_refs:
-            self.parent_agency_refs[transaction_key] = ("", "")
-            
-        # Convert agency_id to string for consistency
-        agency_id = str(agency_id)
-            
-        if level == "agency":
-            self.parent_agency_refs[transaction_key] = (agency_id, self.parent_agency_refs[transaction_key][1])
-            logger.debug(f"Transaction: Updated agency parent ref for {transaction_key} to {agency_id}")
-        elif level == "subagency":
-            self.parent_agency_refs[transaction_key] = (self.parent_agency_refs[transaction_key][0], agency_id)
-            logger.debug(f"Transaction: Updated subagency parent ref for {transaction_key} to {agency_id}")
+        return prev_mods
 
     def get_award_stats(self, award_id: str) -> Dict[str, Any]:
         """Get statistics for an award's transactions."""
         if award_id not in self.award_refs:
             return {}
-            
-        award_data = self.award_refs[award_id]
-        transaction_count = len(award_data["transactions"])
+
+        # Get all transactions for this award
+        modifications = self.relationship_manager.get_related_entities(award_id, "MODIFIED_BY")
+        base_transaction = next(iter(self.relationship_manager.get_related_entities(award_id, "CREATES")), None)
         
+        if base_transaction:
+            modifications.add(base_transaction)
+
+        award_data = self.award_refs[award_id]
         return {
-            "transaction_count": transaction_count,
-            "modification_count": len(self.modification_sequence.get(award_id, set())),
+            "transaction_count": len(modifications),
             "first_action_date": award_data.get("action_date"),
             "modification_number": award_data.get("modification_number"),
             "piid": award_data.get("piid")
         }
 
     def save(self) -> None:
-        """Save transactions with resolved references and stats."""
+        """Save transactions with metadata."""
         try:
-            logger.info(f"Transaction: Starting save with {len(self.cache)} transactions")
-            
-            # Add relationship statistics
-            for award_id, transactions in self.modification_sequence.items():
-                for transaction_id in transactions:
-                    if transaction_id in self.cache:
-                        self.cache[transaction_id]["award_stats"] = self.get_award_stats(award_id)
-                        logger.debug(f"Transaction: Added award stats for {transaction_id} under award {award_id}")
-                        
-            # Add parent agency references
-            for transaction_id, (agency_id, subagency_id) in self.parent_agency_refs.items():
-                if transaction_id in self.cache:
-                    self.cache[transaction_id]["parent_agencies"] = {
-                        "agency_id": agency_id,
-                        "subagency_id": subagency_id
-                    }
-                    logger.debug(f"Transaction: Added parent agency refs for {transaction_id}")
-                    
+            logger.info(f"Transaction: Starting save with {len(self.cache.cache)} transactions")
+
+            # Add award statistics to each transaction
+            for transaction_id, transaction in self.cache.cache.items():
+                # Find award this transaction relates to
+                creates = self.relationship_manager.get_related_entities(transaction_id, "CREATES")
+                modifies = self.relationship_manager.get_related_entities(transaction_id, "MODIFIES")
+                
+                award_id = next(iter(creates | modifies), None)
+                if award_id:
+                    transaction["award_stats"] = self.get_award_stats(award_id)
+                    transaction["references"] = list(self.relationship_manager.get_related_entities(transaction_id, "REFERENCES"))
+
             super().save()
-            logger.info(f"Transaction: Successfully saved {self.stats.unique} transactions")
-            
+            logger.info(f"Transaction: Successfully saved {self.cache.stats.unique} transactions")
+
         except Exception as e:
             logger.error(f"Transaction: Error saving transaction store: {str(e)}")
-            self._cleanup_temp_files()
             raise
