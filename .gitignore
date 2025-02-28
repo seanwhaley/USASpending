@@ -1,0 +1,18 @@
+bak_fy2024_contract_transactions.json
+
+# Output directories
+output/
+*.tmp
+src/usaspending/__pycache__/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.env
+FY2024_015_Contracts_Full_20250109_1.csv
+USASpending_Data_Dictionary_Crosswalk.csv
+USASpending_Data_Dictionary_Crosswalk.json
+bak_fy2024_contract_transactions.json
+USASpending_Data_Dictionary_Crosswalk.json
+.vscode/
+src/usaspending.egg-info/
+dummy_CSV_data.csv

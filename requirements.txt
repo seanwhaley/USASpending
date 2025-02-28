@@ -1,0 +1,23 @@
+# Core dependencies
+pandas
+numpy
+pyyaml
+typing-extensions
+python-dateutil
+python-dotenv==1.0.0
+
+# Development and testing
+pytest
+pytest-cov
+flake8
+mypy
+black
+isort
+
+# Documentation
+sphinx
+sphinx-rtd-theme
+
+# Development tools
+ipython
+jupyter
