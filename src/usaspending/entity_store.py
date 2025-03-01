@@ -1,8 +1,8 @@
 """Base entity store implementation."""
-from typing import Dict, Any, Optional, Union, Set, List
+from typing import Dict, Any, Optional, Set, List, Union
+import json
 import logging
 from pathlib import Path
-from datetime import datetime
 
 from .base_entity_store import BaseEntityStore
 from .entity_cache import EntityCache
@@ -10,6 +10,13 @@ from .entity_mapper import EntityMapper
 from .entity_serializer import EntitySerializer
 from .relationship_manager import RelationshipManager
 from .utils import generate_entity_key
+from .types import (
+    ValidationRule,
+    EntityData,
+    get_registered_type,
+    load_types_from_config
+)
+from .validation import ValidationEngine  # Add this import
 
 logger = logging.getLogger(__name__)
 
@@ -24,81 +31,118 @@ class EntityStore(BaseEntityStore):
             entity_type: Type of entity being stored
             config: Configuration dictionary
         """
-        # Initialize components
         self.config = config
         self.entity_type = entity_type
         self.cache = EntityCache()
-        self.mapper = EntityMapper(config, entity_type)
-        self.serializer = EntitySerializer(base_path, entity_type, 
-                                        config['global']['encoding'])
-        self.relationship_manager = RelationshipManager(entity_type, config)
-            
-    def extract_entity_data(self, row_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract entity data from row."""
-        return self.mapper.extract_entity_data(row_data, self.cache.stats)
-            
-    def add_entity(self, entity_data: Optional[Dict[str, Any]]) -> Optional[Union[str, Dict[str, str]]]:
-        """Add an entity to the store."""
-        if not entity_data:
-            self.cache.add_skipped("invalid_data")
-            logger.debug(f"{self.entity_type}: Skipping invalid entity data")
-            return None
-
-        # Generate entity key
-        entity_key = self._generate_entity_key(entity_data)
-        if not entity_key:
-            self.cache.add_skipped("missing_key_fields")
-            logger.debug(f"{self.entity_type}: Failed to generate key for entity")
-            return None
-            
-        # Add to cache
-        is_update = isinstance(entity_key, str) and entity_key in self.cache.cache
-        self.cache.add_entity(entity_key, entity_data, is_update)
-        logger.debug(f"{self.entity_type}: {'Updated' if is_update else 'Added'} entity with key {entity_key}")
         
-        # Process any configured relationships
-        self.process_relationships(entity_data, {"key": entity_key})
-                
-        return entity_key
+        # Load types from configuration
+        load_types_from_config(config)
+        self.entity_class = get_registered_type(entity_type) or EntityData
+        
+        # Initialize components
+        self.mapper = EntityMapper(config, entity_type)
+        self.serializer = EntitySerializer(
+            Path(base_path), 
+            entity_type,
+            config['global']['encoding']
+        )
+        self.relationship_manager = RelationshipManager(entity_type, config)
+        
+        # Load validation rules from config
+        self.validation_rules = self._load_validation_rules()
+        self.validator = ValidationEngine(config)  # Replace validation setup
             
-    def add_relationship(self, from_key: str, rel_type: str, to_key: str, inverse_type: Optional[str] = None) -> None:
-        """Add a relationship between entities with optional inverse."""
-        self.relationship_manager.add_relationship(from_key, rel_type, to_key, inverse_type)
-            
-    def validate_relationship_types(self, relationship_types: Set[str]) -> List[str]:
-        """Validate relationship types against allowed types."""
-        return self.relationship_manager.validate_relationship_types(relationship_types)
-            
-    def get_related_entities(self, entity_key: str, rel_type: str) -> Set[str]:
-        """Get entities related to the given entity by relationship type."""
-        return self.relationship_manager.get_related_entities(entity_key, rel_type)
-            
-    def process_relationships(self, entity_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> None:
-        """Process all entity relationships."""
-        if not entity_data:
-            return
-            
-        if context is None:
-            context = {}
-            
-        # Skip if no relationship config
+    def _load_validation_rules(self) -> List[ValidationRule]:
+        """Load validation rules from configuration."""
+        rules = []
         entity_config = (self.config.get('contracts', {})
                         .get('entity_separation', {})
                         .get('entities', {})
                         .get(self.entity_type, {}))
                         
-        if not entity_config or 'relationships' not in entity_config:
-            return
-            
-        relationships = entity_config['relationships']
+        validation_config = entity_config.get('validation', {})
+        for field, field_rules in validation_config.items():
+            if isinstance(field_rules, dict):
+                rules.append(ValidationRule.from_yaml({
+                    'field': field,
+                    **field_rules
+                }))
+            elif isinstance(field_rules, str) and field_rules.startswith('$ref:'):
+                rule_config = self._get_validation_rule(field_rules[5:].strip()) #Fixed typo here
+                if rule_config:
+                    rules.append(ValidationRule.from_yaml({
+                        'field': field,
+                        **rule_config
+                    }))
+        return rules
+                    
+    def _get_validation_rule(self, rule_path: str) -> Optional[Dict[str, Any]]:
+        """Get validation rule configuration from reference path."""
+        parts = rule_path.split('.')
+        current = self.config.get('validation_types', {})
         
-        # Process flat relationships
-        if 'flat' in relationships:
-            self.relationship_manager.process_flat_relationships(entity_data, context, relationships['flat'])
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                logger.warning(f"Invalid validation rule reference: {rule_path}")
+                return None
+                
+        return current if isinstance(current, dict) else None
             
-        # Process hierarchical relationships
-        if 'hierarchical' in relationships and isinstance(entity_data, dict):
-            self.relationship_manager.process_hierarchical_relationships(entity_data, entity_keys=context.get('key'), relationship_configs=relationships['hierarchical'])
+    def extract_entity_data(self, row_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Extract entity data from row."""
+        try:
+            entity_data = self.mapper.extract_entity_data(row_data)
+            
+            if entity_data:
+                # Validate against entity type if available
+                if self.entity_class is not EntityData:
+                    try:
+                        entity_data = self.entity_class(**entity_data)
+                    except (TypeError, ValueError) as e:
+                        logger.warning(f"Invalid {self.entity_type} data: {str(e)}")
+                        self.cache.add_skipped("invalid_data")
+                        return None
+                
+                # Apply validation rules to individual fields
+                for field, value in entity_data.items():
+                    rules = [rule for rule in self.validation_rules if rule.field == field]
+                    validation_result = self.validator.validate_field(field, value, rules)
+                    if not validation_result.valid:
+                        entity_key = entity_data.get('id', 'unknown')  # Attempt to get entity key
+                        logger.warning(
+                            f"Validation failed for {self.entity_type} with key {entity_key}, field {field}: {validation_result.message}"
+                        )
+                        self.cache.add_skipped("invalid_data")
+                        return None
+                    
+            return entity_data
+            
+        except Exception as e:
+            logger.exception(f"Error extracting {self.entity_type} entity: {str(e)}")  # Use logger.exception
+            self.cache.add_skipped("extraction_error")
+            return None
+            
+    def add_entity(self, data: Optional[Dict[str, Any]]) -> Optional[Union[str, Dict[str, str]]]:
+        """Add an entity to the store."""
+        if not data:
+            self.cache.add_skipped("invalid_data")
+            return None
+
+        entity_key = self._generate_entity_key(data)
+        if not entity_key:
+            self.cache.add_skipped("missing_key_fields")
+            return None
+            
+        is_update = isinstance(entity_key, str) and entity_key in self.cache.cache
+        self.cache.add_entity(entity_key, data, is_update)
+        
+        # Process relationships if configured
+        if data and entity_key:
+            self.process_relationships(data, {"key": entity_key})
+                
+        return entity_key
             
     def _generate_entity_key(self, entity_data: Dict[str, Any]) -> Optional[str]:
         """Generate a unique key for an entity using configured key fields."""
@@ -110,25 +154,18 @@ class EntityStore(BaseEntityStore):
                         .get('entities', {})
                         .get(self.entity_type, {}))
                         
-        if not entity_config:
-            logger.warning(f"No configuration found for {self.entity_type}")
-            return None
-            
-        # Get key fields from config
         key_fields = entity_config.get('key_fields', [])
         if not key_fields:
             logger.warning(f"No key fields configured for {self.entity_type}")
             return None
             
-        # Get fields and values for key generation
         key_data = {}
         for field in key_fields:
             if field not in entity_data:
-                logger.debug(f"Missing key field {field} for {self.entity_type}")
+                logger.debug(f"Missing key field {field}")
                 return None
             key_data[field] = entity_data[field]
             
-        # Generate key
         key = generate_entity_key(self.entity_type, key_data, key_fields)
         if key:
             if self.entity_type == "agency":
@@ -136,6 +173,36 @@ class EntityStore(BaseEntityStore):
             else:
                 self.cache.stats.hash_keys_used += 1
         return key
+
+    def process_relationships(self, entity_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> None:
+        """Process entity relationships based on configuration."""
+        if not entity_data or not context:
+            return
+            
+        entity_config = (self.config.get('contracts', {})
+                        .get('entity_separation', {})
+                        .get('entities', {})
+                        .get(self.entity_type, {}))
+                        
+        if not entity_config or 'relationships' not in entity_config:
+            return
+            
+        relationships = entity_config['relationships']
+        
+        # Process relationships by type
+        for rel_type in ('flat', 'hierarchical'):
+            if rel_type in relationships:
+                rel_configs = relationships[rel_type]
+                if rel_type == 'flat':
+                    self.relationship_manager.process_flat_relationships(
+                        entity_data, context, rel_configs
+                    )
+                else:
+                    self.relationship_manager.process_hierarchical_relationships(
+                        entity_data, 
+                        entity_keys=context.get('key'), 
+                        relationship_configs=rel_configs
+                    )
 
     def save(self) -> None:
         """Save entities and relationships."""

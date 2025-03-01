@@ -4,28 +4,30 @@ global:
     file: ${INPUT_FILE}
     date_format: "%Y-%m-%d"
     datetime_format: "%Y-%m-%d %H:%M:%S"
-    encoding: "utf-8"
-    batch_size: 10000
-    validate_input: true
-    skip_invalid_rows: false
+    encoding: "utf-8-sig"
+    batch_size: ${BATCH_SIZE}
+    validate_input: ${VALIDATE_INPUT}
+    skip_invalid_rows: ${SKIP_INVALID_ROWS}
   
   output:
     directory: ${OUTPUT_DIR}
     transaction_file: ${TRANSACTION_FILE}
-    indent: 2
-    ensure_ascii: false
+    entities_subfolder: ${ENTITIES_SUBFOLDER}
+    transaction_base_name: ${TRANSACTION_BASE_NAME}
+    indent: ${JSON_INDENT}
+    ensure_ascii: ${ENSURE_ASCII}
   
   processing:
-    records_per_chunk: 50000
-    create_index: true
-    max_chunk_size_mb: 100
-    entity_save_frequency: 10000
-    incremental_save: true
-    log_frequency: 1000
+    records_per_chunk: ${RECORDS_PER_CHUNK}
+    create_index: ${CREATE_INDEX}
+    max_chunk_size_mb: ${MAX_CHUNK_SIZE_MB}
+    entity_save_frequency: ${ENTITY_SAVE_FREQUENCY}
+    incremental_save: ${INCREMENTAL_SAVE}
+    log_frequency: ${LOG_FREQUENCY}
   
   error_handling:
-    max_retries: 3
-    log_errors: true
+    max_retries: ${MAX_RETRIES}
+    log_errors: ${LOG_ERRORS}
 
 # Centralized validation types
 validation_types:
@@ -225,11 +227,11 @@ type_conversion:
         fields:
           # Basic amounts
           - federal_action_obligation
-          - total_*_obligated
+          - "total_*_obligated"
           - "*_outlayed_amount_*"
-          - base_and_*_options_value
+          - "base_and_*_options_value"
           - potential_total_value_of_award
-          - highly_compensated_officer_[1-5]_amount
+          - "highly_compensated_officer_[1-5]_amount"
           # COVID/IIJA funding
           - "*_amount_from_*_supplementals_for_overall_award"
 
@@ -267,18 +269,18 @@ type_conversion:
           - multi_year_contract
           - purchase_card_as_payment_method
           # Business characteristics by category
-          - native_*
-          - *_indian_*
-          - *_american_*
-          - *_owned_*
-          - veteran_*
-          - *_government*
-          - *_institution
-          - corporate_entity_*
-          - small_*
-          - emerging_*
-          - receives_*
-          - historically_underutilized_*
+          - "native_*"
+          - "*_indian_*"
+          - "*_american_*"
+          - "*_owned_*"
+          - "veteran_*"
+          - "*_government*"
+          - "*_institution"
+          - "corporate_entity_*"
+          - "small_*"
+          - "emerging_*"
+          - "receives_*"
+          - "historically_underutilized_*"
           - international_organization
           - manufacturer_of_goods
 
@@ -348,6 +350,10 @@ agency:
         to_level: office
         type: HAS_OFFICE
         inverse: BELONGS_TO_SUBAGENCY
+  entity_processing:
+    enabled: true
+    processing_order: 1  # Lower numbers are processed first
+    store_type: agency   # Maps to EntityFactory implementation
 
 # Location entity configuration
 location:
@@ -391,6 +397,10 @@ location:
         to_field: contract_award_unique_key
         relationship: PLACE_OF_PERFORMANCE_FOR
         inverse: PERFORMED_AT
+  entity_processing:
+    enabled: false  # Example of a disabled entity
+    processing_order: 5
+    store_type: location
 
 # Recipient entity configuration
 recipient:
@@ -463,6 +473,10 @@ recipient:
       - emerging_small_business
       - c8a_program_participant
       - historically_underutilized_business_zone_hubzone_firm
+  entity_processing:
+    enabled: true
+    processing_order: 2
+    store_type: recipient
 
 # Contracts entity configuration
 contract:
@@ -529,6 +543,10 @@ contract:
         to_field: parent_award_agency_id
         relationship: PARENT_AWARDED_BY
         inverse: PARENT_AWARDED
+  entity_processing:
+    enabled: true
+    processing_order: 3
+    store_type: contract
 
 # Transaction entity configuration
 transaction:
@@ -551,3 +569,7 @@ transaction:
   exclude_fields:
     - transaction_unique_id
     - last_transaction_id
+  entity_processing:
+    enabled: true
+    processing_order: 4
+    store_type: transaction

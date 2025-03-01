@@ -43,27 +43,55 @@ class ChunkedWriter:
         self.config = config
         self.field_selector = field_selector
         
-        # Essential fields that must be preserved
-        self.keep_fields = {
-            'contract_transaction_unique_key',
-            'contract_award_unique_key',
-            'award_id_piid',
-            'federal_action_obligation', 
-            'action_date',
-            'recipient_uei'
-        }
+        # Initialize validator if validation is enabled
+        self.validator = None
+        if config['contracts']['input'].get('validate_input', True):
+            self.validator = ValidationEngine(config)
+            logger.debug("Validation engine initialized for ChunkedWriter")
+            
+            # Validate chunk configuration
+            result = self.validator.validate_chunk_config(config)
+            if not result.valid:
+                logger.error(f"Chunk configuration error: {result.message}")
+                raise ValueError(result.message)
         
-        # Validate configuration first
-        self._validate_chunk_config(config)
+        # Extract essential fields from entity configurations
+        self.keep_fields = set()
         
-        # Now we can safely use config values
-        self.chunk_size = chunk_size or config['contracts']['chunking']['records_per_chunk']
-        self.max_chunk_size_mb = config['contracts']['chunking'].get('max_chunk_size_mb')
+        # Collect key_fields from each entity configuration
+        for section_name, section_data in config.items():
+            if isinstance(section_data, dict) and 'key_fields' in section_data:
+                self.keep_fields.update(section_data['key_fields'])
+            
+            # Also check field_mappings for direct mappings that should be preserved
+            if isinstance(section_data, dict) and 'field_mappings' in section_data:
+                for mapped_field in section_data['field_mappings'].values():
+                    if isinstance(mapped_field, str):
+                        self.keep_fields.add(mapped_field)
+                    elif isinstance(mapped_field, list):
+                        self.keep_fields.update(mapped_field)
+        
+        # Require essential fields to be defined in config
+        if not self.keep_fields:
+            raise ValueError("No essential fields (key_fields) found in entity configurations")
+        
+        # Get processing configuration from global settings
+        proc_config = config.get('global', {}).get('processing', {})
+        if not proc_config:
+            raise ValueError("Missing global.processing configuration section")
+        
+        # Set chunk size from config or override
+        self.chunk_size = chunk_size or proc_config.get('records_per_chunk')
+        if not self.chunk_size:
+            raise ValueError("records_per_chunk required in global.processing config")
+            
+        # Get other processing settings
+        self.max_chunk_size_mb = proc_config.get('max_chunk_size_mb')
         
         # Build excluded fields after config validation
         self.excluded_fields = self._build_excluded_fields()
         
-        # Initialize type converter
+        # Initialize type converter with full config for type mappings
         self.type_converter = TypeConverter(config)
         
         # Initialize processing state
@@ -72,22 +100,15 @@ class ChunkedWriter:
         self.total_records = 0
         self.chunks_info: List[ChunkInfo] = []
 
-    def _validate_chunk_config(self, config: Dict[str, Any]) -> None:
-        """Validate chunking configuration."""
-        if 'contracts' not in config:
-            raise ValueError("Missing contracts configuration section")
-            
-        chunk_config = config['contracts'].get('chunking', {})
-        if not chunk_config.get('enabled', False):
-            raise ValueError("Chunking must be enabled")
-            
-        if 'records_per_chunk' not in chunk_config:
-            raise ValueError("records_per_chunk required in chunking config")
-
     def _build_excluded_fields(self) -> Set[str]:
         """Build set of fields to exclude from processed records."""
         excluded: set[str] = set()
-        entity_config = self.config.get('contracts', {}).get('entity_separation', {}).get('entities', {})
+        
+        # Get dynamic path from config
+        entity_path = self.config.get('global', {}).get('entity_config_path', ['contracts', 'entity_separation', 'entities'])
+        entity_config = self.config
+        for path_part in entity_path:
+            entity_config = entity_config.get(path_part, {})
         
         for entity_type, cfg in entity_config.items():
             if 'field_mappings' in cfg:
@@ -100,8 +121,9 @@ class ChunkedWriter:
                         excluded.update(f for f in source_field if f not in self.keep_fields)
                         
             if 'field_patterns' in cfg:
+                exceptions = self.config.get('global', {}).get('field_pattern_exceptions', [])
                 excluded.update(pattern for pattern in cfg['field_patterns']
-                              if pattern != 'award_')
+                              if pattern not in exceptions)
                               
             if 'key_fields' in cfg:
                 excluded.update(k for k in cfg['key_fields']
@@ -111,48 +133,16 @@ class ChunkedWriter:
 
     def clean_record_for_chunk(self, record: Dict[str, Any]) -> Dict[str, Any]:
         """Clean record for chunking by removing excluded fields."""
+        if self.validator:
+            return self.validator.validate_clean_record(record, self.keep_fields, self.excluded_fields)
+            
+        # Fallback for when validation is disabled
         cleaned: Dict[str, Any] = {}
-        
         for key, value in record.items():
             if (key in self.keep_fields or
                 not any(key.startswith(pattern) for pattern in self.excluded_fields) or
                 key.endswith('_ref')):
-                
-                # Special handling for award values and descriptions
-                if key == 'current_total_value_of_award':
-                    cleaned['base_exercised_options_value'] = self.type_converter.convert_value(value, 'base_exercised_options_value')
-                elif key == 'potential_total_value_of_award':
-                    cleaned['base_and_all_options_value'] = self.type_converter.convert_value(value, 'base_and_all_options_value')
-                elif key == 'award_type':
-                    # Map award type directly
-                    cleaned['type'] = self.type_converter.convert_value(value, 'award_type')
-                elif key == 'transaction_description':
-                    # Map transaction description to both transaction and contract entities
-                    desc_value = self.type_converter.convert_value(value, 'description')
-                    if desc_value:
-                        cleaned['description'] = desc_value
-                elif key == 'prime_award_base_transaction_description':
-                    # Handle prime award description
-                    if value:
-                        if 'prime_award' not in cleaned:
-                            cleaned['prime_award'] = {}
-                        desc_value = self.type_converter.convert_value(value, 'description')
-                        if desc_value:
-                            cleaned['prime_award']['description'] = desc_value
-                            cleaned['prime_award']['is_prime'] = True
-                else:
-                    # Convert field values using type converter
-                    value = self.type_converter.convert_value(value, key)
-                    
-                    # Only store non-None values
-                    if value is not None:
-                        cleaned[key] = value
-                
-        # Validate all essential fields made it through cleaning
-        if not all(f in cleaned for f in self.keep_fields):
-            missing = [f for f in self.keep_fields if f not in cleaned]
-            raise ValueError(f"Essential fields lost during cleaning: {', '.join(missing)}")
-                
+                cleaned[key] = value
         return cleaned
 
     def write_records(self) -> None:
@@ -254,10 +244,20 @@ def process_entity_data(entity_stores: Dict[str, EntityStore],
     updated_record = record.copy()
     processed_entities = set()
     
-    # Process entities in dependency order 
-    processing_order = ['agency', 'recipient', 'contract', 'transaction']
+    # Get the ordered entity names (using the same logic as in convert_csv_to_json)
+    processing_order = []
+    for entity_name, entity_config in config.items():
+        if isinstance(entity_config, dict) and 'entity_processing' in entity_config:
+            proc_config = entity_config['entity_processing']
+            if proc_config.get('enabled', False):
+                order = proc_config.get('processing_order', 999)
+                processing_order.append((entity_name, order))
     
-    for entity_type in processing_order:
+    # Sort entities by processing order
+    processing_order.sort(key=lambda x: x[1])
+    ordered_entities = [name for name, _ in processing_order]
+    
+    for entity_type in ordered_entities:
         if entity_type not in entity_stores:
             continue
             
@@ -336,7 +336,7 @@ def _cleanup_backups(stores: Dict[str, EntityStore], max_version: int) -> None:
                 logger.warning(f"Failed to remove backup: {backup}, error: {str(e)}")
 
 def process_record(record: Dict[str, Any], writer: ChunkedWriter, entity_stores: Dict[str, EntityStore], 
-                  validator: Optional[ValidationEngine] = None) -> bool:
+                  validator: Optional[ValidationEngine] = None, validation_results: Optional[List[Any]] = None) -> bool:
     """Process a single record through the pipeline.
     
     Args:
@@ -344,32 +344,29 @@ def process_record(record: Dict[str, Any], writer: ChunkedWriter, entity_stores:
         writer: The ChunkedWriter instance
         entity_stores: Dictionary of entity stores
         validator: Optional validation engine
+        validation_results: Optional precomputed validation results
         
     Returns:
         True if the record was valid and processed, False otherwise
     """
-    valid_record = True
     validation_errors = []
     
-    # Validate record if validator is provided
-    if validator:
-        # Validate each entity type using appropriate rules
-        for entity_type, store in entity_stores.items():
-            # Extract entity data without adding it yet
-            entity_data = store.extract_entity_data(record)
-            if entity_data:
-                # Validate the entity data
-                results = validator.validate_entity(entity_type, entity_data, context=record)
-                invalid_results = [r for r in results if not r.valid]
-                if invalid_results:
-                    for result in invalid_results:
-                        validation_errors.append({
-                            'entity': entity_type,
-                            'field': result.field_name,
-                            'message': result.message,
-                            'error_type': result.error_type
-                        })
-                    valid_record = False
+    # Validate record if validator is provided and no precomputed results
+    if validator and validation_results is None:
+        validation_results = validator.validate_record(record, entity_stores)
+    
+    if validation_results:
+        invalid_results = [r for r in validation_results if not r.valid]
+        if invalid_results:
+            for result in invalid_results:
+                validation_errors.append({
+                    'entity': result.field_name.split('.')[0] if '.' in result.field_name else 'unknown',
+                    'field': result.field_name,
+                    'message': result.message,
+                    'error_type': result.error_type
+                })
+    
+    valid_record = not validation_errors
     
     # If validation failed and skip_invalid_rows is False, raise an error
     if not valid_record and not writer.config['contracts']['input'].get('skip_invalid_rows', False):
@@ -424,73 +421,80 @@ def _log_completion(records: int, start_time: datetime,
             for rel_type, count in rel_stats.items():
                 logger.info(f"  {rel_type}: {count:,d}")
 
-def convert_csv_to_json(config_file: str = '../conversion_config.yaml') -> bool:
+def convert_csv_to_json(config_file: str) -> bool:
     """Convert CSV to JSON using configuration settings."""
     logger = logging.getLogger(__name__)
     
     try:
-        # Load and validate config first
-        try:
-            config = load_config(config_file)
-        except ValueError as config_error:
-            logger.error(f"Configuration error: {str(config_error)}")
-            return False
-            
-        setup_logging()
-        
+        # Load and validate config
+        config = load_config(config_file)
         input_file = config['contracts']['input']['file']
+        output_dir = config['global']['output']['directory']
+        entities_dir = os.path.join(output_dir, config['global']['output']['entities_subfolder'])
+        transaction_base = config['global']['output']['transaction_base_name']
+        output_path = os.path.join(output_dir, transaction_base)
         
-        # Initialize validation engine if validation is enabled
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(entities_dir, exist_ok=True)
+        
         validator = None
         if config['contracts']['input'].get('validate_input', True):
             validator = ValidationEngine(config)
             logger.info("Validation engine initialized")
-            
-            # Validate CSV structure before processing
-            validation_results = validator.validate_csv_columns(input_file)
-            invalid_results = [r for r in validation_results if not r.valid]
-            if invalid_results:
-                for result in invalid_results:
-                    logger.error(f"CSV validation error: {result.message}")
-                raise ValueError("CSV validation failed. See log for details.")
         
-        # Initialize processing components with validated config
+        entity_configs = {}
+        for entity_name, entity_config in config.items():
+            if isinstance(entity_config, dict) and entity_config.get('entity_type', False):
+                result = validator.validate_entity_config(entity_name, entity_config)
+                if not result.valid:
+                    logger.error(f"Entity config validation error: {result.message}")
+                    return False
+                if entity_config.get('entity_processing', {}).get('enabled', False):
+                    entity_configs[entity_name] = entity_config
+        
+        order_results = validator.validate_processing_order(entity_configs)
+        invalid_results = [r for r in order_results if not r.valid]
+        if invalid_results:
+            for result in invalid_results:
+                logger.error(f"Processing order validation error: {result.message}")
+            return False
+
+        with open(input_file, 'r', encoding=config['global']['encoding']) as csvfile:
+            headers = next(csv.reader(csvfile), [])
+            result = validator.validate_csv_structure(headers)
+            if not result.valid:
+                logger.error(f"CSV validation error: {result.message}")
+                return False
+
         field_selector = FieldSelector(config)
-        writer = ChunkedWriter("output/fy2024_contract_transactions", config, field_selector)
-        
-        # Initialize stats dictionary
+        writer = ChunkedWriter(output_path, config, field_selector)
         stats: DefaultDict[str, int] = defaultdict(int)
         start_time = datetime.now()
         last_time = start_time
-        
-        # Process records with validated structure
+
+        validation_results = {}
         with open(input_file, 'r', encoding=config['global']['encoding']) as csvfile:
             reader = csv.DictReader(csvfile)
-            if not reader.fieldnames:
-                raise ValueError("CSV file has no headers")
-                
             batch_size = config['contracts']['input']['batch_size']
             
-            # Create entity stores using factory
-            entity_stores = {
-                'recipient': EntityFactory.create_store('recipient', 'output/entities', config),
-                'agency': EntityFactory.create_store('agency', 'output/entities', config),
-                'contract': EntityFactory.create_store('contract', 'output/entities', config),
-                'transaction': EntityFactory.create_store('transaction', 'output/entities', config)
-            }
+            entity_stores = {}
+            for entity_name, entity_config in entity_configs.items():
+                store_type = entity_config['entity_processing']['store_type']
+                logger.info(f"Creating entity store for: {entity_name} (type: {store_type})")
+                entity_stores[entity_name] = EntityFactory.create_store(store_type, entities_dir, config)
             
-            # Process each record
             for i, record in enumerate(reader, 1):
                 try:
-                    # Process the record with validation
-                    record_valid = process_record(record, writer, entity_stores, validator)
+                    if validator:
+                        validation_results[i] = validator.validate_record(record, entity_stores)
+                    
+                    record_valid = process_record(record, writer, entity_stores, validator, validation_results.get(i))
                     if record_valid:
                         stats['processed'] += 1
                     else:
                         stats['validation_failures'] += 1
                         logger.warning(f"Record {i} failed validation")
                     
-                    # Save entities periodically
                     if i % batch_size == 0:
                         _save_entity_stores(entity_stores, partial=True, version=i//batch_size)
                         _log_progress(i, start_time, last_time, batch_size)
@@ -502,29 +506,17 @@ def convert_csv_to_json(config_file: str = '../conversion_config.yaml') -> bool:
                     if not config['contracts']['input'].get('skip_invalid_rows', False):
                         raise
             
-            # Write any remaining records
             if writer.buffer:
                 writer.write_records()
                 
-            # Write chunk index
             writer.write_index()
-            
-            # Link entities across stores
             EntityFactory.link_entities(entity_stores)
-            
-            # Final entity save
             _save_entity_stores(entity_stores)
-            
-            # Log completion stats
             _log_completion(stats['processed'], start_time, writer, entity_stores)
             
-            # Log validation statistics
             if validator:
                 logger.info(f"Validation statistics:")
-                logger.info(f"  Records processed: {stats['processed'] + stats['validation_failures']}")
-                logger.info(f"  Valid records: {stats['processed']}")
-                logger.info(f"  Validation failures: {stats['validation_failures']}")
-                logger.info(f"  Processing errors: {stats['errors']}")
+                # Log validation statistics here
             
             return True
             

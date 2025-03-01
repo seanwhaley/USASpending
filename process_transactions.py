@@ -8,7 +8,6 @@ transaction data from CSV format to structured JSON with entity separation.
 import sys
 import logging
 import os
-import traceback
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -17,7 +16,7 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.usaspending.config import setup_logging, load_config
+from src.usaspending.config import setup_logging
 from src.usaspending.processor import convert_csv_to_json
 
 # Create a logger for this module
@@ -30,24 +29,17 @@ def main() -> int:
         load_dotenv()
         
         # Setup logging using environment variables
-        logger = setup_logging()
+        setup_logging()
         logger.info("Starting USASpending transaction processing")
         
-        # Get config file path from environment, default to conversion_config.yaml
-        config_file = os.getenv('CONFIG_FILE', os.path.join(project_root, 'conversion_config.yaml'))
-        
-        # First try to load and validate the configuration
-        try:
-            config = load_config(config_file)
-            logger.debug("Configuration loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load configuration: {str(e)}")
-            logger.debug(f"Configuration error details:", exc_info=True)
+        # Get config file path from environment
+        config_file = os.getenv('CONFIG_FILE')
+        if not config_file:
+            logger.error("CONFIG_FILE environment variable not set")
             return 1
-            
+        
         # Run conversion process
         success = convert_csv_to_json(config_file)
-        
         if success:
             logger.info("Conversion completed successfully")
             return 0

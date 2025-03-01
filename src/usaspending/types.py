@@ -1,7 +1,70 @@
 """Type definitions for the USASpending data processing package."""
-from typing import Dict, List, Any, Set, Optional, Union, TypedDict, DefaultDict
+from typing import Dict, List, Any, Set, Optional, Union, TypedDict, DefaultDict, Literal, Type
 from dataclasses import dataclass, field
 from datetime import datetime
+
+# Type Registry
+_TYPE_REGISTRY: Dict[str, type] = {}
+
+def register_type(name: str, type_class: type) -> None:
+    """Register an entity type."""
+    _TYPE_REGISTRY[name] = type_class
+
+def get_registered_type(name: str) -> Optional[type]:
+    """Get a registered entity type."""
+    return _TYPE_REGISTRY.get(name)
+
+def get_registered_types() -> Dict[str, type]:
+    """Get all registered entity types."""
+    return _TYPE_REGISTRY.copy()
+
+def load_types_from_config(config: Dict[str, Any]) -> None:
+    """Load and register entity types from configuration.
+    
+    Args:
+        config: Configuration dictionary containing type definitions
+    """
+    entity_types = config.get('contracts', {}).get('entity_separation', {}).get('entities', {})
+    
+    for entity_type in entity_types:
+        if entity_type not in _TYPE_REGISTRY:
+            # Create a new EntityData-based type for this entity
+            register_type(entity_type, EntityData)
+
+# Core Validation Types
+@dataclass
+class ValidationRule:
+    """Rule definition for field validation."""
+    type: str
+    field: str
+    rules: List[Dict[str, Any]]
+    rule_config: Dict[str, Any] = field(default_factory=dict)
+    source: Optional[str] = None  # Add source attribute
+
+    @classmethod
+    def from_yaml(cls, yaml_config: Dict[str, Any]) -> 'ValidationRule':
+        """Create validation rule from YAML configuration."""
+        return cls(
+            type=yaml_config.get('type', ''),
+            field=yaml_config.get('field', ''),
+            rules=yaml_config.get('rules', []),
+            rule_config=yaml_config.get('config', {})
+        )
+
+@dataclass
+class ValidationResult:
+    """Result of a validation check."""
+    valid: bool
+    message: Optional[str] = None
+    error_type: Optional[str] = None
+    field_name: Optional[str] = None
+
+# Statistics Types
+@dataclass
+class BaseStats:
+    """Base statistics tracking."""
+    total: int = 0
+    unique: int = 0
 
 class SkippedStats(TypedDict, total=False):
     """Statistics about skipped entities."""
@@ -12,27 +75,8 @@ class SkippedStats(TypedDict, total=False):
     no_relevant_data: int
 
 @dataclass
-class ChunkInfo:
-    """Information about a data chunk file."""
-    file: str
-    record_count: int
-    chunk_number: int
-
-# Define EntityData before it's used
-class EntityData(TypedDict, total=False):
-    """Entity data structure definition."""
-    uei: str
-    characteristics: Dict[str, bool]
-    name: Optional[str]
-    address: Optional[Dict[str, str]]
-    identifiers: Optional[Dict[str, str]]
-    business_types: Optional[List[str]]
-
-@dataclass
-class EntityStats:
+class EntityStats(BaseStats):
     """Statistics about processed entities."""
-    total: int = 0
-    unique: int = 0
     natural_keys_used: int = 0
     hash_keys_used: int = 0
     skipped: SkippedStats = field(
@@ -60,191 +104,134 @@ class EntityStats:
         }
 
 @dataclass
-class ContractRelationshipStats:
-    """Statistics about contract relationships."""
-    parent_contracts: int = 0
-    child_contracts: int = 0
-    orphaned_references: int = 0
-    recipient_contracts: int = 0
-    parent_recipient_contracts: int = 0
-    recipient_relationships: int = 0
+class ChunkInfo:
+    """Information about a data chunk file."""
+    file: str
+    record_count: int
+    chunk_number: int
 
-    def to_dict(self) -> Dict[str, int]:
-        """Convert stats to dictionary."""
-        return {
-            "parent_contracts": self.parent_contracts,
-            "child_contracts": self.child_contracts,
-            "orphaned_references": self.orphaned_references,
-            "recipient_contracts": self.recipient_contracts,
-            "parent_recipient_contracts": self.parent_recipient_contracts,
-            "recipient_relationships": self.recipient_relationships
-        }
-
+# Agency-specific types
 @dataclass
-class RecipientCharacteristics:
-    """Recipient business characteristics."""
-    ownership: Set[str] = field(default_factory=set)
-    structure: Set[str] = field(default_factory=set)
-    size: Set[str] = field(default_factory=set)
-    government: Set[str] = field(default_factory=set)
-    institution: Set[str] = field(default_factory=set)
+class AgencyResolutionStats:
+    """Statistics about agency resolution."""
+    total_agencies: int = 0
+    resolved_agencies: int = 0
+    unresolved_agencies: int = 0
+    resolution_by_level: Dict[str, int] = field(default_factory=dict)
+    unresolved_by_level: Dict[str, int] = field(default_factory=dict)
 
-@dataclass
-class AgencyRelations:
-    """Agency relationship tracking."""
-    parent_mappings: Dict[str, Dict[str, str]] = field(default_factory=dict)
-    roles: Dict[str, Set[str]] = field(
-        default_factory=lambda: {
-            'awarding': set(),
-            'funding': set()
-        }
-    )
+# Configuration Types
+class GlobalConfig(TypedDict):
+    """Global configuration section."""
+    input: Dict[str, Any]
+    output: Dict[str, Any]
+    processing: Dict[str, Any]
+    error_handling: Dict[str, Any]
 
-@dataclass
-class ContractValues:
-    """Contract value tracking."""
-    current: float = 0.0
-    potential: float = 0.0
-    obligated: float = 0.0
-    modifications: Set[str] = field(default_factory=set)
+class ValidationTypeConfig(TypedDict):
+    """Validation type configuration."""
+    type: str
+    rules: Optional[List[Dict[str, Any]]]
 
-# Type aliases with more specific types
-ConfigType = Dict[str, Any]
+class EntityFieldMapping(TypedDict):
+    """Entity field mapping configuration."""
+    field: str
+    source: Union[str, List[str], Dict[str, str]]
+
+class EntityRelationship(TypedDict):
+    """Entity relationship configuration."""
+    type: str
+    from_field: str
+    to_field: str
+    relationship: str
+    inverse: Optional[str]
+
+class EntityConfig(TypedDict):
+    """Entity configuration section."""
+    key_fields: List[str]
+    field_mappings: Dict[str, Union[str, List[str], Dict[str, Any]]]
+    relationships: Optional[Dict[str, List[EntityRelationship]]]
+    field_patterns: Optional[List[str]]
+    exclude_fields: Optional[List[str]]
+
+class ConfigType(TypedDict):
+    """Complete configuration type."""
+    global_config: GlobalConfig
+    validation_types: Dict[str, Dict[str, ValidationTypeConfig]]
+    type_conversion: Dict[str, Dict[str, Any]]
+    contracts: Dict[str, Any]
+
+# Entity Types
+class EntityData(TypedDict, total=False):
+    """Base entity data structure."""
+    id: str
+    type: str
+    attributes: Dict[str, Any]
+    relationships: Optional[Dict[str, Any]]
+
+# Entity-specific types
+class RecipientCharacteristics(TypedDict, total=False):
+    """Characteristics of a recipient entity."""
+    business_types: List[str]
+    socioeconomic_indicators: List[str]
+    organizational_structure: Optional[str]
+    size_metrics: Optional[Dict[str, Any]]
+    industry_codes: Optional[Dict[str, str]]
+
+# Error message configuration types
+class ValidationErrorMessages(TypedDict, total=False):
+    """Error message templates for validation."""
+    invalid: str
+    rule_violation: str
+    precision_exceeded: str
+    below_minimum: str
+    above_maximum: str
+
+class ValidationErrorConfig(TypedDict, total=False):
+    """Error message configuration by validation type."""
+    numeric: ValidationErrorMessages
+    date: ValidationErrorMessages
+    string: ValidationErrorMessages
+    general: ValidationErrorMessages
+    csv: ValidationErrorMessages
+
+# Specific validation type configurations
+class NumericValidationConfig(TypedDict, total=False):
+    """Numeric validation configuration."""
+    decimal: Dict[str, Union[int, str]]  # precision, strip_characters
+    min_value: float
+    max_value: float
+
+class DateValidationConfig(TypedDict, total=False):
+    """Date validation configuration."""
+    format: str
+    not_future: bool
+    standard: Dict[str, str]
+
+class StringValidationConfig(TypedDict, total=False):
+    """String validation configuration."""
+    pattern: Dict[str, str]
+    length: Dict[str, int]
+
+# Enhanced ValidationTypeConfig
+class EnhancedValidationTypeConfig(TypedDict, total=False):
+    """Enhanced validation type configuration."""
+    numeric: NumericValidationConfig
+    date: DateValidationConfig
+    string: StringValidationConfig
+    domain: Dict[str, Any]
+
+# Validation configuration section
+class ValidationConfig(TypedDict, total=False):
+    """Validation configuration section."""
+    errors: ValidationErrorConfig
+    empty_values: List[str]
+    field_types: Dict[str, str]
+
+# Type aliases
 RelationshipMap = Dict[str, Dict[str, Set[str]]]
 EntityCache = Dict[str, EntityData]
+TypeRegistry = Dict[str, type]
 
-# New types for tracking parent agencies
-ParentAgencyMapping = Dict[str, Dict[str, str]]  # {parent_id: {'level': 'department|sub_agency|office', 'mapped_id': 'actual_agency_id'}}
-PendingParentAgencies = Dict[str, Dict[str, Any]]  # {parent_id: {'name': str, 'data': Dict}}
-
-@dataclass
-class ParentAgencyReference:
-    """Parent award agency reference."""
-    agency_id: str
-    agency_name: str
-    level: Optional[str] = None
-    resolved_id: Optional[str] = None
-
-class AgencyHierarchyLevel(TypedDict):
-    """Agency hierarchy level definition."""
-    code: str
-    name: str
-    source_fields: Dict[str, List[str]]
-
-class AgencyResolutionStats(TypedDict):
-    """Statistics for parent agency resolution."""
-    total_references: int
-    resolved_immediately: int
-    resolved_later: int
-    unresolved: int
-    levels: Dict[str, int]  # Count of resolutions by level
-
-# Specific type definitions for configuration sections
-class TypeConversionConfig(TypedDict):
-    """Type conversion configuration section."""
-    date_fields: List[str]
-    numeric_fields: List[str]
-    boolean_true_values: List[str]
-    boolean_false_values: List[str]
-
-class ChunkingConfig(TypedDict):
-    """Chunking configuration section."""
-    enabled: bool
-    records_per_chunk: int
-    create_index: bool
-
-class InputConfig(TypedDict):
-    """Input configuration section."""
-    file: str
-    batch_size: int
-
-class OutputConfig(TypedDict):
-    """Output configuration section."""
-    main_file: str
-    indent: int
-    ensure_ascii: bool
-
-# Fix ContractFinancialData to use proper Optional types
-class ContractFinancialData(TypedDict, total=False):
-    """Contract-level financial data."""
-    total_obligated: float
-    total_outlayed: Optional[float]
-    base_exercised_value: float
-    current_value: float
-    base_all_options: float
-    potential_value: float
-
-class ProductServiceData(TypedDict):
-    """Product or service classification."""
-    code: str
-    description: str
-    
-class CompetitionData(TypedDict):
-    """Competition and set-aside information."""
-    extent_competed: Dict[str, str]  # code/description
-    set_aside: Dict[str, str]       # code/description
-    
-class SolicitationData(TypedDict):
-    """Solicitation-related information."""
-    identifier: Optional[str]
-    procedures: Dict[str, str]      # code/description
-    number_of_offers: int
-
-class TransactionEntity(TypedDict, total=False):
-    """Transaction-specific data."""
-    transaction_key: str
-    action_date: str
-    action_type: str
-    modification_number: str
-    description: str
-    obligation_amount: float
-    contract_ref: str
-    recipient_ref: str
-    awarding_agency_ref: str
-    funding_agency_ref: str
-
-class PlaceOfPerformanceData(TypedDict, total=False):
-    """Place of performance location data."""
-    city: str
-    state: str
-    zip: str
-    country: str
-    county: str
-    congressional_district: str
-    foreign_city: Optional[str]
-    foreign_country_name: Optional[str]
-
-class ContractData(TypedDict, total=False):
-    """Contract entity data structure."""
-    award_id: str
-    piid: str
-    parent_piid: Optional[str]
-    parent_agency_id: Optional[str]
-    solicitation_id: Optional[str]
-    description: str
-    transaction_desc: Optional[str]
-    type: str
-    current_value: float
-    potential_value: float
-    current_total: float
-    potential_total: float
-    total_obligated: float
-    performance_start: Optional[str]
-    performance_end: Optional[str]
-    last_modified: str
-    is_parent: bool
-    child_count: int
-
-# Validation Types
-@dataclass
-class ValidationRule:
-    """Rule definition for field validation."""
-    type: str
-    field: str
-    rules: List[Dict[str, Any]]
-
-@dataclass
-class ValidationResult:
-    """Result of a validation check."""
-    valid: bool
-    message: Optional[str] = None
+# Register built-in types
+register_type('recipient', EntityData)

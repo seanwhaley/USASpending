@@ -369,3 +369,19 @@ Traceback (most recent call last):
   File "D:\VS Code Projects\USASpending\src\usaspending\config.py", line 406, in load_config
     raise ValueError(f"Error loading configuration: {str(e)}")
 ValueError: Error loading configuration: Invalid configuration: Key field 'agency_code' missing from field_mappings and not referenced as a source
+2025-02-28 21:16:13,440 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 21:16:13,456 - ERROR - process_transactions:44 - main - Failed to load configuration: Error parsing YAML configuration: while scanning an alias
+  in "conversion_config.yaml", line 271, column 13
+expected alphabetic or numeric character, but found '*'
+  in "conversion_config.yaml", line 271, column 22
+2025-02-28 21:18:09,500 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 21:18:09,513 - ERROR - process_transactions:44 - main - Failed to load configuration: Error parsing YAML configuration: while scanning an alias
+  in "conversion_config.yaml", line 271, column 13
+expected alphabetic or numeric character, but found '*'
+  in "conversion_config.yaml", line 271, column 22
+2025-02-28 21:19:38,438 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 21:19:38,467 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: 'encoding'
+2025-02-28 21:23:51,765 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 21:23:51,794 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: 'encoding'
+2025-02-28 21:26:21,056 - INFO - process_transactions:34 - main - Starting USASpending transaction processing
+2025-02-28 21:26:21,086 - ERROR - process_transactions:44 - main - Failed to load configuration: Error loading configuration: Invalid configuration: Missing required section 'contracts'
