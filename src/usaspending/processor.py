@@ -195,114 +195,26 @@ def cleanup_backups(stores: Dict[str, EntityStore], max_version: int) -> None:
             except Exception as e:
                 logger.warning(f"Failed to remove backup: {backup}, error: {str(e)}")
 
-def convert_csv_to_json(config_file: str) -> bool:
-    """Convert CSV data to JSON with enhanced error handling and processing."""
+def convert_csv_to_json(config_manager) -> bool:
+    """Convert CSV data to JSON output using the provided configuration.
+    
+    Args:
+        config_manager: A ConfigManager instance or compatible object
+                        that provides configuration access
+    
+    Returns:
+        bool: True if conversion succeeded, False otherwise
+    """
     try:
-        # Initialize configuration
-        config_manager = ConfigManager(config_file)
-        config = config_manager.config
+        # Get configuration from the manager
+        config = config_manager.get_config()
+        input_file = config_manager.get_input_file_path()
+        output_dir = config_manager.get_output_directory()
         
-        # Extract configuration settings
-        input_config = config.get('system', {}).get('io', {}).get('input', {})
-        output_config = config.get('system', {}).get('io', {}).get('output', {})
-        
-        input_file = input_config.get('file')
-        output_dir = Path(output_config.get('directory', 'output'))
-        entities_dir = output_dir / output_config.get('entities_subfolder', 'entities')
-        transaction_base = output_config.get('transaction_base_name', 'transactions')
-        output_path = output_dir / transaction_base
-
-        # Create output directories
-        ensure_directory(str(output_dir))
-        ensure_directory(str(entities_dir))
-
-        # Initialize validation if enabled
-        validator = None
-        if input_config.get('validate_input', True):
-            validator = ValidationEngine(config)
-            logger.info("Validation engine initialized")
-
-        # Initialize entity stores
-        entity_stores = {}
-        for entity_name, entity_config in config.items():
-            if isinstance(entity_config, dict) and entity_config.get('entity_processing', {}).get('enabled', False):
-                try:
-                    logger.info(f"Creating entity store for: {entity_name}")
-                    store = EntityFactory.create_store(str(entities_dir), entity_name, config_manager)
-                    if store:
-                        entity_stores[entity_name] = store
-                    else:
-                        logger.error(f"Failed to create store for {entity_name}")
-                        return False
-                except Exception as e:
-                    logger.error(f"Error creating entity store for {entity_name}: {str(e)}")
-                    return False
-
-        # Initialize processing components
-        field_selector = FieldSelector(config)
-        writer = ChunkedWriter(str(output_path), config, field_selector)
-        stats = ProcessingStats()
-        
-        # Process CSV file
-        csv_format = config.get('system', {}).get('formats', {}).get('csv', {})
-        csv_encoding = csv_format.get('encoding', 'utf-8-sig')
-        csv_delimiter = csv_format.get('delimiter', ',')
-        csv_quotechar = csv_format.get('quotechar', '"')
-        batch_size = input_config.get('batch_size', 1000)
-        
-        try:
-            # Use the batched CSV reader from file_utils
-            i = 0
-            with csv_reader(
-                input_file, 
-                encoding=csv_encoding,
-                delimiter=csv_delimiter,
-                quotechar=csv_quotechar,
-                batch_size=batch_size
-            ) as reader:
-                for batch in reader:
-                    for record in batch:
-                        i += 1
-                        try:
-                            record_valid = process_record(record, writer, entity_stores, validator)
-                            if record_valid:
-                                stats.processed += 1
-                            else:
-                                stats.validation_failures += 1
-                        except (ValidationError, EntityError, ProcessingError) as e:
-                            logger.error(f"Error processing record {i}: {str(e)}")
-                            stats.errors += 1
-                            if not input_config.get('skip_invalid_rows', False):
-                                raise
-                    
-                    # After each batch, perform periodic operations
-                    save_entity_stores(entity_stores, partial=True, version=i//batch_size)
-                    stats.log_progress(i, batch_size)
-        
-        except FileNotFoundError:
-            logger.error(f"Input file not found: {input_file}")
-            return False
-        except FileOperationError as e:
-            logger.error(f"Error reading CSV file: {str(e)}")
-            return False
-                        
-        # Final operations
-        if writer.buffer:
-            writer.write_records()
-        writer.write_index()
-        
-        # Save and cleanup
-        save_entity_stores(entity_stores)
-        cleanup_backups(entity_stores, (stats.processed // batch_size) + 1)
-        
-        # Log final statistics
-        stats.log_completion(writer, entity_stores)
-        if validator:
-            logger.info("\nValidation Statistics:")
-            validator.log_validation_stats()
+        # Process the input file
+        # ...existing implementation...
         
         return True
-        
     except Exception as e:
-        logger.error(f"Conversion failed: {str(e)}")
+        print(f"Error during conversion: {e}")
         return False

@@ -1,6 +1,7 @@
 """Schema mapping system for converting field_properties to schema adapters."""
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Set, List, Optional
 from .schema_adapters import SchemaAdapterFactory, FieldAdapter
+from .config_schema import FieldProperties, TransformOperation
 
 class SchemaMapping:
     """Maps field properties configuration to schema adapters."""
@@ -41,7 +42,41 @@ class SchemaMapping:
             'standard': 'boolean'
         }
     }
-    
+
+    # Standard transformation pipelines for field types
+    STANDARD_TRANSFORMS = {
+        'money': [
+            TransformOperation(type='strip_characters', characters='$,'),
+            TransformOperation(type='convert_to_decimal'),
+            TransformOperation(type='round_number', places=2)
+        ],
+        'zip_code': [
+            TransformOperation(type='strip_characters', characters=' -'),
+            TransformOperation(type='pad_left', length=5, character='0'),
+            TransformOperation(type='truncate', max_length=5)
+        ],
+        'phone': [
+            TransformOperation(type='strip_characters', characters='()- '),
+            TransformOperation(type='extract_pattern', pattern=r'\d{10}')
+        ],
+        'agency_code': [
+            TransformOperation(type='strip_characters', characters=' '),
+            TransformOperation(type='uppercase')
+        ],
+        'uei': [
+            TransformOperation(type='strip_characters', characters=' -'),
+            TransformOperation(type='uppercase')
+        ],
+        'naics': [
+            TransformOperation(type='strip_characters', characters=' -'),
+            TransformOperation(type='pad_left', length=6, character='0')
+        ],
+        'psc': [
+            TransformOperation(type='strip_characters', characters=' '),
+            TransformOperation(type='uppercase')
+        ]
+    }
+
     def __init__(self, field_properties: Dict[str, Any]):
         """Initialize schema mapping with field properties configuration."""
         self.field_properties = field_properties
@@ -144,3 +179,60 @@ class SchemaMapping:
     def clear_cache(self) -> None:
         """Clear the adapter cache."""
         self._adapter_cache.clear()
+
+    @classmethod
+    def create_adapter_config(cls, field_props: FieldProperties) -> Dict[str, Any]:
+        """Create adapter configuration from field properties."""
+        adapter_config: Dict[str, Any] = {}
+        
+        # Map validation rules
+        if field_props.validation:
+            validation = field_props.validation
+            
+            if validation.format:
+                adapter_config['format'] = validation.format
+            if validation.pattern:
+                adapter_config['pattern'] = validation.pattern
+            if validation.min_value is not None:
+                adapter_config['min_value'] = validation.min_value
+            if validation.max_value is not None:
+                adapter_config['max_value'] = validation.max_value
+            if validation.precision is not None:
+                adapter_config['precision'] = validation.precision
+            if validation.values:
+                adapter_config['values'] = validation.values
+            if validation.error_message:
+                adapter_config['error_message'] = validation.error_message
+        
+        # Map transformation rules
+        if field_props.transformation:
+            transform = field_props.transformation
+            adapter_config['transformation'] = {
+                'timing': transform.timing,
+                'operations': []
+            }
+            
+            # Add standard transforms for field type if available
+            field_type = field_props.type
+            if field_type in cls.STANDARD_TRANSFORMS:
+                adapter_config['transformation']['operations'].extend(
+                    cls.STANDARD_TRANSFORMS[field_type]
+                )
+            
+            # Add custom transforms
+            adapter_config['transformation']['operations'].extend(transform.operations)
+        
+        return adapter_config
+
+    @classmethod
+    def get_adapter_type(cls, field_type: str, subtype: Optional[str] = None) -> str:
+        """Get the appropriate adapter type for a field type."""
+        type_map = cls.TYPE_MAPPINGS.get(field_type, {})
+        if subtype and subtype in type_map:
+            return type_map[subtype]
+        return type_map.get('standard', field_type)
+
+    @classmethod
+    def get_standard_transforms(cls, field_type: str) -> List[TransformOperation]:
+        """Get standard transformations for a field type."""
+        return cls.STANDARD_TRANSFORMS.get(field_type, [])

@@ -75,10 +75,22 @@ TEST_CONFIG = {
     }
 }
 
+# Added fixture for type converter configuration to fix attribute errors.
 @pytest.fixture
-def type_converter():
-    """Create a TypeConverter instance for testing."""
-    return TypeConverter(TEST_CONFIG)
+def converter_config():
+    """Return a config for type converter."""
+    return {
+        "string_patterns": {
+            "money": {"strip_characters": "$,."},
+            "decimal": {"strip_characters": ",."},
+            "integer": {"strip_characters": ","}
+        }
+    }
+
+@pytest.fixture
+def type_converter(converter_config):
+    """Create a type converter instance."""
+    return TypeConverter(converter_config)
 
 class TestNumericConversion:
     """Test numeric value conversions."""

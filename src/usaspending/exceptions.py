@@ -51,3 +51,7 @@ class ReferenceError(EntityMappingError):
 class KeyGenerationError(EntityMappingError):
     """Error generating entity keys."""
     pass
+
+class EntityStoreError(EntityError):
+    """Error in entity storage operations."""
+    pass

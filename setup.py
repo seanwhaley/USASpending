@@ -8,7 +8,7 @@ setup(
     package_dir={"": "src"},
     install_requires=[
         "PyYAML>=6.0.1,<7.0.0",
-        "python-dateutil==2.8.2",
+        "python-dateutil>=2.9.0.post0",  # Updated to latest version
     ],
     extras_require={
         "dev": [

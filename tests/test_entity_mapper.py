@@ -1,4 +1,3 @@
-"""Tests for entity mapping functionality."""
 import pytest
 from datetime import datetime
 from unittest.mock import Mock
@@ -103,6 +102,20 @@ TEST_CONFIG = {
 def entity_mapper():
     """Create an EntityMapper instance for testing."""
     return EntityMapper(TEST_CONFIG, "test_entity")
+
+# Added fixture for entity configuration to fix EntityMapper init issue.
+@pytest.fixture
+def entity_config():
+    """Return a sample entity configuration."""
+    return {
+        "key_fields": ["id"],
+        "field_mappings": {
+            "direct": {
+                "id": {"field": "source_id"},
+                "name": {"field": "source_name"}
+            }
+        }
+    }
 
 def test_direct_mapping(entity_mapper):
     """Test direct field mapping."""
@@ -213,3 +226,8 @@ def test_custom_type_validation(entity_mapper):
     result = entity_mapper.extract_entity_data(test_data)
     assert result is not None
     assert "zip" not in result["location"]
+
+def test_entity_mapper_creation():
+    mapper = EntityMapper(TEST_CONFIG, "test_entity")
+    assert mapper is not None
+    assert mapper.entity_type == "test_entity"

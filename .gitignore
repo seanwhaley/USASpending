@@ -52,3 +52,5 @@ output/
 USASpending_Data_Dictionary_Crosswalk.csv
 bak_fy2024_contract_transactions.json
 *.log
+/.qodo
+test_errors.txt

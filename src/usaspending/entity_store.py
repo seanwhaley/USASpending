@@ -12,6 +12,7 @@ from .entity_cache import EntityCache, get_entity_cache
 from .entity_mapper import EntityMapper
 from .entity_serializer import EntitySerializer
 from .utils import generate_entity_key
+from .exceptions import TransformationError
 from .types import (
     ValidationRule,
     EntityData,
@@ -145,36 +146,44 @@ class EntityStore:
                 
         return current if isinstance(current, dict) else None
             
-    def extract_entity_data(self, row_data: Dict[str, Any]) -> Optional[Dict[str, Any]]: 
-        """Extract entity data from row."""
-        try:
-            entity_data = self.mapper.extract_entity_data(row_data)
+    def extract_entity_data(self, source_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Extract entity data from source data according to mapping rules.
+        
+        Args:
+            source_data: Dictionary containing source data
             
-            if entity_data:
-                if self.entity_class is not EntityData:
-                    try:
-                        entity_data = self.entity_class(**entity_data)
-                    except (TypeError, ValueError) as e:
-                        logger.warning(
-                            self.config.get('validation_messages', {}).get('entity', {}).get('invalid_data', 
-                            "Invalid data for {entity_type}: {error}").format(  # Fix config access
-                                entity_type=self.entity_type,
-                                error=str(e)
-                            )
-                        )
-                        self.cache.add_skipped("invalid_data")
-                        return None
-                        
-        except Exception as e:
-            logger.exception(
-                self.config.get('validation_messages', {}).get('entity', {}).get('extraction_error',
-                "Error extracting {entity_type}: {error}").format(  # Fix config access
-                    entity_type=self.entity_type, 
-                    error=str(e)
-                )
-            )
-            self.cache.add_skipped("extraction_error")
-            return None
+        Returns:
+            Optional[Dict[str, Any]]: Mapped entity data or None if required fields missing
+        """
+        result = {}
+        
+        # Check for required key fields
+        for key_field in self.key_fields:
+            if key_field not in source_data or not source_data[key_field]:
+                return None
+        
+        # Process direct mappings
+        for target_field, mapping in self.direct_mappings.items():
+            source_field = mapping.get("field")
+            if source_field not in source_data:
+                continue
+                
+            value = source_data[source_field]
+            
+            # Apply transformations if defined
+            if "transformation" in mapping:
+                try:
+                    value = self._apply_transformation(value, mapping["transformation"])
+                    if value is None:  # Skip fields that failed transformation
+                        continue
+                except TransformationError:
+                    continue
+                    
+            result[target_field] = value
+        
+        # Additional mapping types...
+        
+        return result
             
     def add_entity(self, data: Optional[Dict[str, Any]]) -> Optional[Union[str, Dict[str, str]]]:
         """Add an entity to the store."""
