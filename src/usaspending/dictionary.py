@@ -9,6 +9,14 @@ import os
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+from .file_utils import (
+    read_csv_file, write_json_file, ensure_directory,
+    FileOperationError, FileNotFoundError, FileFormatError
+)
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
+
 def validate_domain_value_format(value: str, field_name: str) -> None:
     """Validate domain value format is correct at initialization."""
     if not value:
@@ -168,27 +176,30 @@ def csv_to_json(config: Dict[str, Any]) -> bool:
         csv_file_path = os.path.abspath(dict_config['input']['file'])
         json_file_path = os.path.abspath(dict_config['output']['file'])
         
-        # Validate file paths
-        if not os.path.exists(csv_file_path):
-            raise FileNotFoundError(f"Input CSV file not found: {csv_file_path}")
-            
         # Create output directory if needed
         output_dir = os.path.dirname(json_file_path)
-        if output_dir and not os.path.exists(output_dir):
+        if output_dir:
             try:
-                os.makedirs(output_dir)
-            except OSError as e:
-                raise OSError(f"Failed to create output directory: {str(e)}")
+                ensure_directory(output_dir)
+            except FileOperationError as e:
+                logger.error(f"Failed to create output directory: {str(e)}")
+                return False
         
         preserve_newlines_for = set(dict_config.get('parsing', {}).get('preserve_newlines_for', []))
         
         # Process CSV with validated configuration
         entries = []
-        with open(csv_file_path, 'r', encoding=global_config['encoding']) as csvfile:
-            reader = csv.DictReader(csvfile)
+        try:
+            rows = read_csv_file(
+                csv_file_path,
+                encoding=global_config['encoding'],
+                delimiter=',',
+                quotechar='"',
+                has_header=True
+            )
             
-            # Pre-validate domain values format
-            for row in reader:
+            # Pre-validate and process rows
+            for row in rows:
                 if not any(row.values()):
                     continue
                     
@@ -237,6 +248,10 @@ def csv_to_json(config: Dict[str, Any]) -> bool:
                 if clean_entry:
                     entries.append(clean_entry)
 
+        except (FileNotFoundError, FileOperationError, FileFormatError) as e:
+            logger.error(f"Error reading CSV file: {str(e)}")
+            return False
+
         output = {
             "metadata": {
                 "source": "USASpending Data Dictionary Crosswalk",
@@ -248,13 +263,23 @@ def csv_to_json(config: Dict[str, Any]) -> bool:
         }
         
         # Write to JSON file using validated configuration
-        with open(json_file_path, 'w', encoding=global_config['encoding']) as jsonfile:
-            json.dump(output, jsonfile, 
-                     indent=dict_config['output'].get('indent', 2),
-                     ensure_ascii=dict_config['output'].get('ensure_ascii', False))
-        
-        return True
+        try:
+            write_json_file(
+                json_file_path,
+                output,
+                encoding=global_config['encoding'],
+                indent=dict_config['output'].get('indent', 2),
+                ensure_ascii=dict_config['output'].get('ensure_ascii', False),
+                make_dirs=True,
+                atomic=True
+            )
+            logger.info(f"Successfully processed {len(entries)} dictionary entries")
+            return True
+            
+        except FileOperationError as e:
+            logger.error(f"Error writing JSON file: {str(e)}")
+            return False
         
     except Exception as e:
-        print(f"Error processing data dictionary: {str(e)}")
+        logger.error(f"Error processing data dictionary: {str(e)}")
         return False

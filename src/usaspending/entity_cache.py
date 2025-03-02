@@ -1,4 +1,4 @@
-"""In-memory entity cache and statistics tracking."""
+"""Entity cache implementation using singleton pattern."""
 from typing import Dict, Any, Optional, Set, DefaultDict
 from collections import defaultdict
 
@@ -13,10 +13,19 @@ class EntityStats:
         self.relationships: Dict[str, int] = defaultdict(int)  # Counts by relationship type
 
 class EntityCache:
-    """Manages in-memory entity storage and statistics."""
-
+    """Singleton cache for storing entities."""
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self):
-        """Initialize entity cache."""
+        if self._initialized:
+            return
+        self._initialized = True
         self.cache: Dict[str, Dict[str, Any]] = {}
         self.stats = EntityStats()
         self.pending_parents: Dict[str, Dict[str, Any]] = {}
@@ -171,3 +180,7 @@ class EntityCache:
             "skipped": dict(self.stats.skipped),
             "relationships": dict(self.stats.relationships)
         }
+
+def get_entity_cache() -> EntityCache:
+    """Get the global EntityCache instance."""
+    return EntityCache()

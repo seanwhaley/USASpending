@@ -1,126 +1,178 @@
-"""Base entity store implementation."""
-from typing import Dict, Any, Optional, Set, List, Union
+"""Entity store implementation with integrated relationship management."""
+from typing import Dict, Any, Optional, Set, List, Union, Iterator, Tuple, DefaultDict
+from collections import defaultdict
+from itertools import chain
 import json
 import logging
 from pathlib import Path
 
-from .base_entity_store import BaseEntityStore
-from .entity_cache import EntityCache
+from .config import ConfigManager
+from .validation import ValidationEngine
+from .entity_cache import EntityCache, get_entity_cache
 from .entity_mapper import EntityMapper
 from .entity_serializer import EntitySerializer
-from .relationship_manager import RelationshipManager
 from .utils import generate_entity_key
 from .types import (
     ValidationRule,
     EntityData,
     get_registered_type,
-    load_types_from_config
+    get_type_manager,
+    EntityStats,
+    RelationshipMap
 )
-from .validation import ValidationEngine  # Add this import
 
 logger = logging.getLogger(__name__)
 
-class EntityStore(BaseEntityStore):
-    """Basic entity store implementation using consolidated components."""
+class EntityStore:
+    """Entity store implementation with integrated validation and relationship management."""
 
-    def __init__(self, base_path: str, entity_type: str, config: Dict[str, Any]) -> None:
-        """Initialize entity store with validation.
-        
-        Args:
-            base_path: Base path for entity storage
-            entity_type: Type of entity being stored
-            config: Configuration dictionary
-        """
-        self.config = config
+    def __init__(self, base_path: str, entity_type: str, config: ConfigManager) -> None:
+        """Initialize entity store with validation."""
+        self.config_manager = config
         self.entity_type = entity_type
-        self.cache = EntityCache()
+        self.config = self.config_manager.config
+        self.entity_config = self.config_manager.get_entity_config(entity_type)
         
-        # Load types from configuration
-        load_types_from_config(config)
-        self.entity_class = get_registered_type(entity_type) or EntityData
+        if not self.entity_config:
+            raise ValueError(f"No configuration found for entity type: {entity_type}")
+            
+        # Core components initialization
+        self.cache = get_entity_cache()
+        self.type_manager = get_type_manager()
+        self.type_manager.load_from_config(self.config)
+        self.entity_class = self.type_manager.get_type(entity_type) or EntityData
         
-        # Initialize components
-        self.mapper = EntityMapper(config, entity_type)
+        # Component managers
+        self.mapper = EntityMapper(self.config_manager, entity_type)
         self.serializer = EntitySerializer(
             Path(base_path), 
             entity_type,
-            config['global']['encoding']
+            self.config.get('global', {}).get('encoding', 'utf-8')
         )
-        self.relationship_manager = RelationshipManager(entity_type, config)
         
-        # Load validation rules from config
+        # Initialize relationship management
+        self._init_relationship_management()
+        
+        # Load validation rules
         self.validation_rules = self._load_validation_rules()
-        self.validator = ValidationEngine(config)  # Replace validation setup
-            
+        self.validator = ValidationEngine(self.config_manager)
+
+    def _init_relationship_management(self) -> None:
+        """Initialize relationship management capabilities."""
+        self.relationships: DefaultDict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
+        self._relationship_configs = self._cache_relationship_configs()
+        
+    def _cache_relationship_configs(self) -> Dict[str, Any]:
+        """Cache relationship configurations for faster access."""
+        configs = {
+            'hierarchical': self.entity_config.get('relationships', {}).get('hierarchical', []),
+            'flat': self.entity_config.get('relationships', {}).get('flat', []),
+            'valid_types': set(),
+            'inverse_mappings': {},
+            'relationship_rules': defaultdict(dict)
+        }
+
+        # Process relationship configurations
+        for rel_config in chain(configs['hierarchical'], configs['flat']):
+            if 'type' in rel_config:
+                rel_type = rel_config['type']
+                configs['valid_types'].add(rel_type)
+                
+                if 'inverse_type' in rel_config:
+                    inverse_type = rel_config['inverse_type']
+                    configs['valid_types'].add(inverse_type)
+                    configs['inverse_mappings'][rel_type] = inverse_type
+                    configs['inverse_mappings'][inverse_type] = rel_type
+
+                if 'rules' in rel_config:
+                    configs['relationship_rules'][rel_type].update(rel_config['rules'])
+                    
+        return configs
+
     def _load_validation_rules(self) -> List[ValidationRule]:
         """Load validation rules from configuration."""
         rules = []
-        entity_config = (self.config.get('contracts', {})
-                        .get('entity_separation', {})
-                        .get('entities', {})
-                        .get(self.entity_type, {}))
-                        
-        validation_config = entity_config.get('validation', {})
+        validation_config = self.entity_config.get('validation', {})
+        error_messages = self.config.get('validation_messages', {})  # Fix property access
+        
         for field, field_rules in validation_config.items():
-            if isinstance(field_rules, dict):
-                rules.append(ValidationRule.from_yaml({
-                    'field': field,
-                    **field_rules
-                }))
-            elif isinstance(field_rules, str) and field_rules.startswith('$ref:'):
-                rule_config = self._get_validation_rule(field_rules[5:].strip()) #Fixed typo here
-                if rule_config:
+            try:
+                if isinstance(field_rules, dict):
+                    # Add error message handling
+                    if 'error' in field_rules:
+                        error_key = field_rules['error']
+                        if error_key in error_messages:
+                            field_rules['error_text'] = error_messages[error_key]
                     rules.append(ValidationRule.from_yaml({
                         'field': field,
-                        **rule_config
+                        **field_rules
                     }))
+                elif isinstance(field_rules, str) and field_rules.startswith('$ref:'):
+                    rule_config = self._get_validation_rule(field_rules[5:].trip())
+                    if rule_config:
+                        # Add error message handling for referenced rules
+                        if 'error' in rule_config:
+                            error_key = rule_config['error']
+                            if error_key in error_messages:
+                                rule_config['error_text'] = error_messages[error_key]
+                        rules.append(ValidationRule.from_yaml({
+                            'field': field,
+                            **rule_config
+                        }))
+            except Exception as e:
+                error_template = self.config.get('validation_messages', {}).get('rules', {}).get(
+                    'loading_error', "Error loading validation rule for field {field}: {error}"
+                )
+                logger.error(error_template.format(field=field, error=str(e)))
+                continue
+                
         return rules
                     
-    def _get_validation_rule(self, rule_path: str) -> Optional[Dict[str, Any]]:
+    def _get_validation_rule(self, rule_path: str) -> Optional[Dict[str, Any]]: 
         """Get validation rule configuration from reference path."""
         parts = rule_path.split('.')
-        current = self.config.get('validation_types', {})
+        current = self.config.get('validation_types', {})  # Fix config access
         
         for part in parts:
             if isinstance(current, dict) and part in current:
                 current = current[part]
             else:
-                logger.warning(f"Invalid validation rule reference: {rule_path}")
+                error_template = self.config.get('validation_messages', {}).get('rules', {}).get(
+                    'invalid_reference', "Invalid validation rule reference: {path}"
+                )
+                logger.warning(error_template.format(path=rule_path))
                 return None
                 
         return current if isinstance(current, dict) else None
             
-    def extract_entity_data(self, row_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def extract_entity_data(self, row_data: Dict[str, Any]) -> Optional[Dict[str, Any]]: 
         """Extract entity data from row."""
         try:
             entity_data = self.mapper.extract_entity_data(row_data)
             
             if entity_data:
-                # Validate against entity type if available
                 if self.entity_class is not EntityData:
                     try:
                         entity_data = self.entity_class(**entity_data)
                     except (TypeError, ValueError) as e:
-                        logger.warning(f"Invalid {self.entity_type} data: {str(e)}")
-                        self.cache.add_skipped("invalid_data")
-                        return None
-                
-                # Apply validation rules to individual fields
-                for field, value in entity_data.items():
-                    rules = [rule for rule in self.validation_rules if rule.field == field]
-                    validation_result = self.validator.validate_field(field, value, rules)
-                    if not validation_result.valid:
-                        entity_key = entity_data.get('id', 'unknown')  # Attempt to get entity key
                         logger.warning(
-                            f"Validation failed for {self.entity_type} with key {entity_key}, field {field}: {validation_result.message}"
+                            self.config.get('validation_messages', {}).get('entity', {}).get('invalid_data', 
+                            "Invalid data for {entity_type}: {error}").format(  # Fix config access
+                                entity_type=self.entity_type,
+                                error=str(e)
+                            )
                         )
                         self.cache.add_skipped("invalid_data")
                         return None
-                    
-            return entity_data
-            
+                        
         except Exception as e:
-            logger.exception(f"Error extracting {self.entity_type} entity: {str(e)}")  # Use logger.exception
+            logger.exception(
+                self.config.get('validation_messages', {}).get('entity', {}).get('extraction_error',
+                "Error extracting {entity_type}: {error}").format(  # Fix config access
+                    entity_type=self.entity_type, 
+                    error=str(e)
+                )
+            )
             self.cache.add_skipped("extraction_error")
             return None
             
@@ -132,6 +184,10 @@ class EntityStore(BaseEntityStore):
 
         entity_key = self._generate_entity_key(data)
         if not entity_key:
+            error_template = self.config.get('validation_messages', {}).get('entity', {}).get(
+                'missing_key_fields', "Missing required key fields for {entity_type}"
+            )
+            logger.warning(error_template.format(entity_type=self.entity_type))
             self.cache.add_skipped("missing_key_fields")
             return None
             
@@ -145,69 +201,143 @@ class EntityStore(BaseEntityStore):
         return entity_key
             
     def _generate_entity_key(self, entity_data: Dict[str, Any]) -> Optional[str]:
-        """Generate a unique key for an entity using configured key fields."""
-        if not entity_data:
-            return None
-            
-        entity_config = (self.config.get('contracts', {})
-                        .get('entity_separation', {})
-                        .get('entities', {})
-                        .get(self.entity_type, {}))
-                        
-        key_fields = entity_config.get('key_fields', [])
-        if not key_fields:
-            logger.warning(f"No key fields configured for {self.entity_type}")
-            return None
-            
-        key_data = {}
-        for field in key_fields:
-            if field not in entity_data:
-                logger.debug(f"Missing key field {field}")
-                return None
-            key_data[field] = entity_data[field]
-            
-        key = generate_entity_key(self.entity_type, key_data, key_fields)
-        if key:
-            if self.entity_type == "agency":
-                self.cache.stats.natural_keys_used += 1
-            else:
-                self.cache.stats.hash_keys_used += 1
-        return key
+        """Generate entity key using mapper."""
+        return self.mapper.build_key(entity_data)
 
     def process_relationships(self, entity_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> None:
         """Process entity relationships based on configuration."""
         if not entity_data or not context:
             return
             
-        entity_config = (self.config.get('contracts', {})
-                        .get('entity_separation', {})
-                        .get('entities', {})
-                        .get(self.entity_type, {}))
-                        
-        if not entity_config or 'relationships' not in entity_config:
+        entity_key = context.get('key')
+        if not entity_key or not isinstance(entity_key, str):
+            logger.warning(f"Invalid entity key in context for {self.entity_type}")
             return
+
+        self._process_flat_relationships(entity_data, entity_key)
+        self._process_hierarchical_relationships(entity_data, entity_key)
+
+    def _process_flat_relationships(self, entity_data: Dict[str, Any], entity_key: str) -> None:
+        """Process flat relationships."""
+        for rel_config in self._relationship_configs['flat']:
+            from_field = rel_config.get('from_field')
+            to_field = rel_config.get('to_field')
+            rel_type = rel_config.get('type')
+            inverse_type = rel_config.get('inverse_type')
             
-        relationships = entity_config['relationships']
-        
-        # Process relationships by type
-        for rel_type in ('flat', 'hierarchical'):
-            if rel_type in relationships:
-                rel_configs = relationships[rel_type]
-                if rel_type == 'flat':
-                    self.relationship_manager.process_flat_relationships(
-                        entity_data, context, rel_configs
-                    )
+            if not all([from_field, to_field, rel_type]):
+                continue
+                
+            from_value = entity_data.get(from_field)
+            to_value = entity_data.get(to_field)
+            
+            if from_value and to_value:
+                if isinstance(from_value, (list, set)):
+                    for value in from_value:
+                        self.add_relationship(str(value), rel_type, str(to_value), inverse_type)
                 else:
-                    self.relationship_manager.process_hierarchical_relationships(
-                        entity_data, 
-                        entity_keys=context.get('key'), 
-                        relationship_configs=rel_configs
-                    )
+                    self.add_relationship(str(from_value), rel_type, str(to_value), inverse_type)
+
+    def _process_hierarchical_relationships(self, entity_data: Dict[str, Any], entity_key: str) -> None:
+        """Process hierarchical relationships."""
+        entity_keys = self._extract_entity_keys(entity_data)
+        if not entity_keys:
+            return
+
+        for rel_config in self._relationship_configs['hierarchical']:
+            from_level = rel_config.get('from_level')
+            to_level = rel_config.get('to_level')
+            rel_type = rel_config.get('type')
+            inverse_type = rel_config.get('inverse_type')
+            
+            if not all([from_level, to_level, rel_type]):
+                continue
+                
+            if from_level in entity_keys and to_level in entity_keys:
+                from_key = entity_keys[from_level]
+                to_key = entity_keys[to_level]
+                
+                if self.would_create_cycle(to_key, from_key):
+                    logger.warning(f"Skipping cyclic relationship: {from_key} -{rel_type}-> {to_key}")
+                    continue
+                
+                self.add_relationship(from_key, rel_type, to_key, inverse_type)
+
+    def _extract_entity_keys(self, entity_data: Dict[str, Any]) -> Dict[str, str]:
+        """Extract entity keys from data for hierarchical relationships."""
+        return {
+            level: str(entity_data[key_field])
+            for level, key_field in self.entity_config.get('key_fields', {}).items()
+            if key_field in entity_data
+        }
+
+    def add_relationship(self, from_key: str, rel_type: str, to_key: str, inverse_type: Optional[str] = None) -> None:
+        """Add a relationship between entities."""
+        if not all([from_key, rel_type, to_key]):
+            logger.warning("Invalid relationship parameters")
+            return
+
+        if rel_type not in self._relationship_configs['valid_types']:
+            logger.warning(f"Invalid relationship type '{rel_type}' for {self.entity_type}")
+            return
+
+        # Apply relationship rules
+        rules = self._relationship_configs['relationship_rules'].get(rel_type, {})
+        if rules:
+            if rules.get('exclusive', False) and self.relationships[from_key][rel_type]:
+                logger.warning(f"Exclusive relationship violation for {rel_type}")
+                return
+                
+            if rules.get('max_cardinality'):
+                if len(self.relationships[from_key][rel_type]) >= rules['max_cardinality']:
+                    logger.warning(f"Maximum cardinality reached for {rel_type}")
+                    return
+
+        # Add relationships
+        self.relationships[from_key][rel_type].add(to_key)
+        
+        effective_inverse = inverse_type or self._relationship_configs['inverse_mappings'].get(rel_type)
+        if effective_inverse:
+            self.relationships[to_key][effective_inverse].add(from_key)
+
+    def get_related_entities(self, entity_key: str, rel_type: str) -> Set[str]:
+        """Get related entities by type."""
+        return self.relationships[entity_key][rel_type].copy()
+
+    def get_all_relationships(self, entity_key: str) -> Dict[str, Set[str]]:
+        """Get all relationships for an entity."""
+        return {k: v.copy() for k, v in self.relationships[entity_key].items()}
+
+    def would_create_cycle(self, child_key: str, parent_key: str) -> bool:
+        """Check for relationship cycles."""
+        if child_key == parent_key:
+            return True
+
+        hierarchical_types = {
+            config['type'] for config in self._relationship_configs['hierarchical']
+            if 'type' in config
+        }
+
+        ancestors = set()
+        to_check = {parent_key}
+        
+        while to_check:
+            current = to_check.pop()
+            if current == child_key:
+                return True
+                
+            for rel_type in hierarchical_types:
+                parents = self.get_related_entities(current, rel_type)
+                new_ancestors = parents - ancestors
+                ancestors.update(new_ancestors)
+                to_check.update(new_ancestors)
+                
+        return False
 
     def save(self) -> None:
         """Save entities and relationships."""
         self.serializer.save(
             self.cache.cache,
-            self.relationship_manager.relationships,
+            dict(self.relationships),  # Convert defaultdict to regular dict
             self.cache.get_stats()
         )

@@ -1,575 +1,1237 @@
-# Global settings
-global:
-  input:
-    file: ${INPUT_FILE}
-    date_format: "%Y-%m-%d"
-    datetime_format: "%Y-%m-%d %H:%M:%S"
-    encoding: "utf-8-sig"
-    batch_size: ${BATCH_SIZE}
-    validate_input: ${VALIDATE_INPUT}
-    skip_invalid_rows: ${SKIP_INVALID_ROWS}
-  
-  output:
-    directory: ${OUTPUT_DIR}
-    transaction_file: ${TRANSACTION_FILE}
-    entities_subfolder: ${ENTITIES_SUBFOLDER}
-    transaction_base_name: ${TRANSACTION_BASE_NAME}
-    indent: ${JSON_INDENT}
-    ensure_ascii: ${ENSURE_ASCII}
-  
+#==============================================================================
+# USASpending Data Conversion Configuration
+# 
+# This configuration file defines the mapping, validation, and relationship
+# rules for converting USASpending CSV data into a structured JSON format.
+# It follows a standardized structure for maintainability and clarity.
+#==============================================================================
+
+#==============================================================================
+# 1. SYSTEM CONFIGURATION
+#==============================================================================
+system:
+  # Global processing settings
   processing:
-    records_per_chunk: ${RECORDS_PER_CHUNK}
-    create_index: ${CREATE_INDEX}
-    max_chunk_size_mb: ${MAX_CHUNK_SIZE_MB}
-    entity_save_frequency: ${ENTITY_SAVE_FREQUENCY}
-    incremental_save: ${INCREMENTAL_SAVE}
-    log_frequency: ${LOG_FREQUENCY}
+    records_per_chunk: 10000
+    create_index: true
+    max_chunk_size_mb: 100
+    entity_save_frequency: 10000
+    incremental_save: true
+    log_frequency: 1000
   
+  # Input/output settings
+  io:
+    input:
+      file: "FY2024_015_Contracts_Full_20250109_1.csv"
+      batch_size: 1000
+      validate_input: true
+      skip_invalid_rows: false
+      field_pattern_exceptions: []
+    
+    output:
+      directory: "output"
+      transaction_file: "contracts.json"
+      entities_subfolder: "entities"
+      transaction_base_name: "transactions"
+      indent: 2
+      ensure_ascii: false
+  
+  # File formats
+  formats:
+    csv:
+      encoding: "utf-8-sig"
+      delimiter: ","
+      quotechar: "\""
+      has_header_row: true
+    json:
+      indent: 2
+      ensure_ascii: false
+
+  # Error handling
   error_handling:
-    max_retries: ${MAX_RETRIES}
-    log_errors: ${LOG_ERRORS}
+    max_retries: 3
+    log_errors: true
+    error_messages:
+      validation:
+        missing_fields: "Required fields missing in input: {fields}"
+        invalid_numeric: "Invalid numeric value for field {field}"
+        invalid_date: "Invalid date format for field {field}"
+        invalid_enum: "Value {value} not in allowed values for field {field}"
+        invalid_reference: "Referenced entity not found for field {field}"
+      processing:
+        entity_error: "Error processing entity {entity_type}: {error}"
+        skipping_record: "Skipping invalid record: {reason}"
+        missing_entity_config: "Missing configuration for entity type: {entity_type}"
+      file_operations:
+        file_not_found: "File not found: {path}"
+        permission_error: "Permission denied: {path}"
 
-# Centralized validation types
-validation_types:
+#==============================================================================
+# 2. DATA DICTIONARY
+#==============================================================================
+data_dictionary:
+  # Data dictionary crosswalk configuration
+  crosswalk:
+    input:
+      file: USASpending_Data_Dictionary_Crosswalk.csv
+      required_columns:
+        - Element
+        - Definition
+        - FPDS Data Dictionary Element
+        - Grouping
+        - Domain Values
+        - Domain Values Code Description
+    output:
+      file: output/USASpending_Data_Dictionary_Crosswalk.json
+      indent: 2
+      ensure_ascii: false
+    parsing:
+      preserve_newlines_for:
+        - Definition
+      split_by_both_comma_and_newline:
+        - Award File
+        - Award Element
+        - Subaward File
+        - Subaward Element
+        - Account File
+        - Account Element
+    mapping:
+      # Map key fields from data dictionary to entity fields
+      contract_transaction_unique_key:
+        element: ContractTransactionUniqueKey
+        grouping: Award Attribute
+      award_id_piid:
+        element: PIID
+        grouping: Award Attribute
+      action_date:
+        element: ActionDate
+        grouping: Award Attribute
+      federal_action_obligation:
+        element: FederalActionObligation
+        grouping: Award Spending
+
+#==============================================================================
+# 3. FIELD PROPERTIES
+#==============================================================================
+field_properties:
+  # Numeric field properties
   numeric:
-    decimal:
-      type: decimal
-      precision: 3
-      min_value: 0
-      strip_currency: true
-      strip_characters: "$,."
     money:
-      type: decimal
-      precision: 2
-      min_value: 0
-      greater_than_or_equal: 0
-      strip_currency: true
+      validation:
+        type: decimal
+        precision: 2
+        min_value: 0
+        error_message: "Invalid money value for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: strip_characters
+            characters: "$,."
+          - type: convert_to_decimal
+      fields:
+        - federal_action_obligation
+        - total_dollars_obligated
+        - base_and_exercised_options_value
+        - base_and_all_options_value
+        - potential_total_value_of_award
+        - "total_*_obligated"
+        - "*_outlayed_amount_*"
+        - "base_and_*_options_value"
+        - "highly_compensated_officer_[1-5]_amount"
+        - "*_amount_from_*_supplementals_for_overall_award"
+    
     integer:
-      type: integer
-      min_value: 0
+      validation:
+        type: integer
+        min_value: 0
+        error_message: "Invalid integer value for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: convert_to_integer
+      fields:
+        - action_date_fiscal_year
+        - number_of_actions
+        - number_of_offers_received
+        - "number_of_*"
+    
+    decimal:
+      validation:
+        type: decimal
+        precision: 3
+        min_value: 0
+        max_value: 100
+        error_message: "Invalid decimal value for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: strip_characters
+            characters: "%"
+          - type: convert_to_decimal
+      fields:
+        - price_evaluation_adjustment_preference_percent_difference
+    
     comparison:
-      greater_than:
-        type: comparison
-        operator: ">"
-      less_than:
-        type: comparison
-        operator: "<"
-      equal:
-        type: comparison
-        operator: "="
-      greater_equal:
-        type: comparison
-        operator: ">="
-      less_equal:
-        type: comparison
-        operator: "<="
+      validation:
+        type: field_comparison
+        error_message: "Field {field} must be {operator} {compare_to}"
+        comparisons:
+          - operator: "<="
+            field_pairs:
+              - field: base_and_exercised_options_value
+                compare_to: base_and_all_options_value
+              - field: current_total_value_of_award
+                compare_to: potential_total_value_of_award
+      transformation: {}  # No transformations for comparisons
 
+  # Date field properties
   date:
     standard:
-      type: date
-      format: "%Y-%m-%d"
-      strip_time: true
+      validation:
+        type: date
+        format: "%Y-%m-%d"
+        error_message: "Invalid date format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: normalize_date
+            input_formats:
+              - "%m/%d/%Y"
+              - "%Y%m%d"
+              - "%Y-%m-%d"
+            output_format: "%Y-%m-%d"
+          - type: strip_time
+      fields:
+        - action_date
+        - period_of_performance_start_date
+        - period_of_performance_current_end_date
+        - period_of_performance_potential_end_date
+        - ordering_period_end_date
+        - solicitation_date
+        - initial_report_date
+        - last_modified_date
+        - "period_of_performance_*_date"
+    
     not_future:
-      type: date
-      rule: "not_future"
+      validation:
+        type: date
+        rule: "not_future"
+        error_message: "Date cannot be in the future: {field}: {value}"
+      transformation:
+        timing: inherit  # Inherits transformation from standard date
+      fields:
+        - action_date
+    
     comparison:
-      before:
+      validation:
         type: date_comparison
-        operator: "<"
-      after:
-        type: date_comparison
-        operator: ">"
-
+        error_message: "Date {field} must be {operator} {compare_to}"
+        comparisons:
+          - operator: "<"
+            field_pairs:
+              - field: period_of_performance_start_date
+                compare_to: period_of_performance_current_end_date
+      transformation: {}  # No transformations for comparisons
+  
+  # String field properties
   string:
-    pattern:
-      agency_code: "^[0-9]{3}$"
-      uei: "^[A-Z0-9]{12}$"
-      naics: "^[0-9]{6}$"
-      psc: "^[A-Z0-9]{4}$"
-      zip: "^[0-9]{5}(-[0-9]{4})?$"
-      phone: "^[0-9]{10}$"
-    length:
-      max: 4000
-      state_code: 2
-      country_code: 3
-
-  boolean:
-    validation:
-      true_values: ["true", "yes", "y", "1", "t", "T"]
-      false_values: ["false", "no", "n", "0", "f", "F"]
-
-  domain:
-    exists_in_mapping:
-      type: lookup
-      strict: true
-    mutually_exclusive:
-      type: exclusive
-      error_on_multiple: true
-    mappings:
-      # Contract and Award Types
-      contract_types:
-        A: "BPA CALL"
-        B: "PURCHASE ORDER"
-        C: "DELIVERY ORDER"
-        D: "DEFINITIVE CONTRACT"
-      
-      idv_types:
-        A: "BLANKET PURCHASE AGREEMENT"
-        B: "INDEFINITE DELIVERY CONTRACT"
-        C: "FEDERAL SUPPLY SCHEDULE"
-        D: "BASIC ORDERING AGREEMENT"
-        E: "BASIC AGREEMENT"
-
-      competition_extent:
-        A: "FULL AND OPEN COMPETITION"
-        B: "NOT AVAILABLE FOR COMPETITION"
-        C: "NOT COMPETED"
-        D: "FULL AND OPEN COMPETITION AFTER EXCLUSION OF SOURCES"
-        E: "FOLLOW ON TO COMPETED ACTION"
-
-      solicitation_procedures:
-        NP: "NEGOTIATED PROPOSAL/QUOTE"
-        SP: "SEALED BID"
-        MAFO: "SUBJECT TO MULTIPLE AWARD FAIR OPPORTUNITY"
-        SSS: "ONLY ONE SOURCE"
-        TO: "TASK ORDER"
-        DO: "DELIVERY ORDER"
-
-      set_aside_types:
-        NONE: "NO PREFERENCE USED"
-        SBA: "SMALL BUSINESS SET ASIDE - TOTAL"
-        8A: "8(A) SET ASIDE"
-        SDVO: "SERVICE-DISABLED VETERAN-OWNED SMALL BUSINESS"
-        WOSB: "WOMAN OWNED SMALL BUSINESS"
-        HUB: "HISTORICALLY UNDERUTILIZED BUSINESS ZONE"
-
-      contract_pricing:
-        "A": "FIXED PRICE REDETERMINATION"
-        "B": "FIXED PRICE LEVEL OF EFFORT"  
-        "J": "FIRM FIXED PRICE"
-        "K": "FIXED PRICE WITH ECONOMIC PRICE ADJUSTMENT"
-        "L": "FIXED PRICE INCENTIVE"
-        "M": "FIXED PRICE AWARD FEE"
-        "R": "COST PLUS AWARD FEE"
-        "S": "COST NO FEE"
-        "T": "COST SHARING"
-        "U": "COST PLUS FIXED FEE"
-        "V": "COST PLUS INCENTIVE FEE"
-        "Y": "TIME AND MATERIALS"
-        "Z": "LABOR HOURS"
-        "1": "ORDER DEPENDENT (IDV ALLOWS PRICING ARRANGEMENT TO BE DETERMINED SEPARATELY FOR EACH ORDER)"
-        "2": "COMBINATION (APPLIES TO AWARDS WHERE TWO OR MORE OF THE ABOVE APPLY)"
-        "3": "OTHER (APPLIES TO AWARDS WHERE NONE OF THE ABOVE APPLY)"
-
-      action_types:
-        "A": "ADDITIONAL WORK (NEW AGREEMENT, JUSTIFICATION REQUIRED)"
-        "B": "SUPPLEMENTAL AGREEMENT FOR WORK WITHIN SCOPE"
-        "C": "FUNDING ONLY ACTION"
-        "D": "CHANGE ORDER"
-        "E": "TERMINATE FOR DEFAULT (COMPLETE OR PARTIAL)"
-        "F": "TERMINATE FOR CONVENIENCE (COMPLETE OR PARTIAL)"
-        "G": "EXERCISE AN OPTION"
-        "H": "DEFINITIZE LETTER CONTRACT"
-        "J": "NOVATION AGREEMENT"
-        "K": "CLOSE OUT"
-        "L": "DEFINITIZE CHANGE ORDER"
-        "M": "OTHER ADMINISTRATIVE ACTION"
-        "N": "LEGAL CONTRACT CANCELLATION"
-        "P": "REREPRESENTATION OF NON-NOVATED MERGER/ACQUISITION"
-        "R": "REREPRESENTATION"
-        "S": "CHANGE PIID"
-        "T": "TRANSFER ACTION"
-        "V": "UNIQUE ENTITY ID OR LEGAL BUSINESS NAME CHANGE - NON-NOVATION"
-        "W": "ENTITY ADDRESS CHANGE"
-        "X": "TERMINATE FOR CAUSE"
-        "Y": "ADD SUBCONTRACTING PLAN"
-
-      governmental_functions:
-        "CL": "CLOSELY ASSOCIATED"
-        "CT": "CRITICAL FUNCTIONS" 
-        "OT": "OTHER FUNCTIONS"
-        "CL,CT": "CLOSELY ASSOCIATED,CRITICAL FUNCTIONS"
-
-      yes_no_extended:
-        "Y": "YES"
-        "N": "NO"
-        "X": "NOT APPLICABLE"
-
-      performance_based_service_acquisition:
-        "Y": "YES - SERVICE WHERE PBA IS USED."
-        "N": "NO - SERVICE WHERE PBA IS NOT USED."
-        "X": "NOT APPLICABLE"
-
-# Type conversion configuration
-type_conversion:
-  date:
-    fields:
-      - $ref: validation_types.date.standard
-        fields:
-          - period_of_performance_*_date
-          - ordering_period_end_date
-          - solicitation_date
-          - initial_report_date
-          - last_modified_date
-      
-      - $ref: validation_types.date.not_future
-        fields:
-          - action_date
-      
-      - $ref: validation_types.date.comparison.before
-        fields:
-          - field: period_of_performance_start_date
-            compare_to: period_of_performance_current_end_date
-
-  numeric:
-    fields:
-      - $ref: validation_types.numeric.money
-        fields:
-          # Basic amounts
-          - federal_action_obligation
-          - "total_*_obligated"
-          - "*_outlayed_amount_*"
-          - "base_and_*_options_value"
-          - potential_total_value_of_award
-          - "highly_compensated_officer_[1-5]_amount"
-          # COVID/IIJA funding
-          - "*_amount_from_*_supplementals_for_overall_award"
-
-      - $ref: validation_types.numeric.comparison.less_equal
-        fields:
-          - field: base_and_exercised_options_value
-            compare_to: base_and_all_options_value
-          - field: current_total_value_of_award
-            compare_to: potential_total_value_of_award
-
-      - $ref: validation_types.numeric.integer
-        fields:
-          - action_date_fiscal_year
-          - number_of_*
-
-      - $ref: validation_types.numeric.decimal
-        fields:
-          field: price_evaluation_adjustment_preference_percent_difference
-          rules:
-            - type: min_value
-              value: 0
-            - type: max_value
-              value: 100
-
-  boolean:
-    fields:
-      - value_type:
-          $ref: validation_types.boolean.validation
-        fields:
-          # Transaction indicators
-          - is_fpds
-          - pulled_from_parent
-          # Contract properties
-          - government_furnished_property
-          - multi_year_contract
-          - purchase_card_as_payment_method
-          # Business characteristics by category
-          - "native_*"
-          - "*_indian_*"
-          - "*_american_*"
-          - "*_owned_*"
-          - "veteran_*"
-          - "*_government*"
-          - "*_institution"
-          - "corporate_entity_*"
-          - "small_*"
-          - "emerging_*"
-          - "receives_*"
-          - "historically_underutilized_*"
-          - international_organization
-          - manufacturer_of_goods
-
-# Data Dictionary crosswalk configuration
-data_dictionary_crosswalk:
-  input:
-    file: USASpending_Data_Dictionary_Crosswalk.csv
-    required_columns:
-      - Element
-      - Definition
-      - FPDS Data Dictionary Element
-      - Grouping
-      - Domain Values
-      - Domain Values Code Description
-  output:
-    file: output/USASpending_Data_Dictionary_Crosswalk.json
-    indent: 2
-    ensure_ascii: false
-  parsing:
-    preserve_newlines_for:
-      - Definition
-    split_by_both_comma_and_newline:
-      - Award File
-      - Award Element
-      - Subaward File
-      - Subaward Element
-      - Account File
-      - Account Element
-  mapping:
-    # Map key fields from data dictionary to entity fields
-    contract_transaction_unique_key:
-      element: ContractTransactionUniqueKey
-      grouping: Award Attribute
-    award_id_piid:
-      element: PIID
-      grouping: Award Attribute
-    action_date:
-      element: ActionDate
-      grouping: Award Attribute
-    federal_action_obligation:
-      element: FederalActionObligation
-      grouping: Award Spending
-
-# Agency entity configuration
-agency:
-  key_fields:
-    - agency_code
-    - sub_agency_code
-    - office_code
-  field_mappings:
-    agency:
-      code: ["awarding_agency_code", "funding_agency_code", "parent_award_agency_id"]
-      name: ["awarding_agency_name", "funding_agency_name", "parent_award_agency_name"]
-    sub_agency:
-      code: ["awarding_sub_agency_code", "funding_sub_agency_code"]
-      name: ["awarding_sub_agency_name", "funding_sub_agency_name"]
-    office:
-      code: ["awarding_office_code", "funding_office_code"]
-      name: ["awarding_office_name", "funding_office_name"]
-  relationships:
-    hierarchical:
-      - from_level: agency
-        to_level: sub_agency
-        type: HAS_SUBAGENCY
-        inverse: BELONGS_TO_AGENCY
-      - from_level: sub_agency
-        to_level: office
-        type: HAS_OFFICE
-        inverse: BELONGS_TO_SUBAGENCY
-  entity_processing:
-    enabled: true
-    processing_order: 1  # Lower numbers are processed first
-    store_type: agency   # Maps to EntityFactory implementation
-
-# Location entity configuration
-location:
-  key_fields:
-    - country_code
-    - state_code
-    - city_name
-    - county_name
-    - zip_code
-    - address_line_1
-  field_mappings:
-    # Base location fields
-    country:
-      code: ["recipient_country_code", "primary_place_of_performance_country_code"]
-      name: ["recipient_country_name", "primary_place_of_performance_country_name"]
-    state:
-      code: ["recipient_state_code", "primary_place_of_performance_state_code"]
-      name: ["recipient_state_name", "primary_place_of_performance_state_name"]
-    city: ["recipient_city_name", "primary_place_of_performance_city_name"]
-    county: ["recipient_county_name", "primary_place_of_performance_county_name"]
-    zip: ["recipient_zip_4_code", "primary_place_of_performance_zip_4"]
-    address:
-      line1: "recipient_address_line_1"
-      line2: "recipient_address_line_2"
-    congressional_district: ["prime_award_transaction_recipient_cd_current", "prime_award_transaction_place_of_performance_cd_current"]
-  validation:
-    country_code:
-      $ref: validation_types.string.pattern.country_code
-    state_code:
-      $ref: validation_types.string.length.state_code
+    agency_code:
+      validation:
+        type: string
+        pattern: "^[0-9]{3}$"
+        error_message: "Invalid agency code format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: trim
+          - type: pad_left
+            character: "0"
+            length: 3
+      fields:
+        - awarding_agency_code
+        - funding_agency_code
+        - parent_award_agency_id
+    
+    uei:
+      validation:
+        type: string
+        pattern: "^[A-Z0-9]{12}$"
+        error_message: "Invalid UEI format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+      fields:
+        - recipient_uei
+        - recipient_parent_uei
+    
+    naics:
+      validation:
+        type: string
+        pattern: "^[0-9]{6}$"
+        error_message: "Invalid NAICS code format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: strip_characters
+            characters: "- ."
+      fields:
+        - naics_code
+    
+    psc:
+      validation:
+        type: string
+        pattern: "^[A-Z0-9]{4}$"
+        error_message: "Invalid PSC code format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+      fields:
+        - product_or_service_code
+    
     zip_code:
-      $ref: validation_types.string.pattern.zip
-  relationships:
-    recipient:
-      - type: primary_address
-        to_field: uei
-        relationship: PRIMARY_ADDRESS_OF
-        inverse: HAS_PRIMARY_ADDRESS
-    contract:
-      - type: place_of_performance
-        to_field: contract_award_unique_key
-        relationship: PLACE_OF_PERFORMANCE_FOR
-        inverse: PERFORMED_AT
-  entity_processing:
-    enabled: false  # Example of a disabled entity
-    processing_order: 5
-    store_type: location
+      validation:
+        type: string
+        pattern: "^[0-9]{5}(-[0-9]{4})?$"
+        error_message: "Invalid zip code format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: normalize_zip
+            formats:
+              - "%5d"
+              - "%5d-%4d"
+      fields:
+        - recipient_zip_4_code
+        - primary_place_of_performance_zip_4
+    
+    phone:
+      validation:
+        type: string
+        pattern: "^[0-9]{10}$"
+        error_message: "Invalid phone number format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: strip_characters
+            characters: "()- ."
+          - type: extract_pattern
+            pattern: "[0-9]{10}"
+      fields:
+        - recipient_phone_number
+    
+    max_length:
+      validation:
+        type: string
+        max_length: 4000
+        error_message: "String exceeds maximum length for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: truncate
+            max_length: 4000
+      fields:
+        - transaction_description
+        - award_description
+    
+    state_code:
+      validation:
+        type: string
+        pattern: "^[A-Z]{2}$"
+        max_length: 2
+        error_message: "Invalid state code format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+          - type: trim
+      fields:
+        - recipient_state_code
+        - primary_place_of_performance_state_code
+    
+    country_code:
+      validation:
+        type: string
+        pattern: "^[A-Z]{3}$"
+        max_length: 3
+        error_message: "Invalid country code format for {field}: {value}"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+          - type: trim
+          - type: map_values
+            mapping:
+              "US": "USA"
+              "U.S.": "USA"
+              "U.S.A.": "USA"
+              "United States": "USA"
+      fields:
+        - recipient_country_code
+        - primary_place_of_performance_country_code
 
-# Recipient entity configuration
-recipient:
-  key_fields:
-    - uei  # Changed from recipient_uei to uei for consistency
-  field_mappings:
-    uei: recipient_uei  # Maps from CSV field to entity field
-    parent_uei: recipient_parent_uei  # Maps parent UEI from CSV
-    name: recipient_name
-    dba_name: recipient_doing_business_as_name
-    parent_name: recipient_parent_name
-    naics: {
-      code: naics_code,
-      description: naics_description
-    }
-    contact: {
-      phone: "recipient_phone_number",
-      fax: "recipient_fax_number",
-      type: "primary"
-    }
-    location_ref: {
-      type: "primary_address",
-      key_prefix: "recipient",
-      fields: ["country_code", "state_code", "city_name", "county_name", "zip_code", "address_line_1", "address_line_2"]
-    }
-  relationships:
-    hierarchical:
-      - from_level: recipient
-        to_level: parent
-        type: PARENT_OF
-        inverse: CHILD_OF
-    contract:
-      - type: primary
-        from_field: uei
-        to_field: contract_award_unique_key
-        relationship: RECIPIENT_OF
-        inverse: AWARDED_TO
+  # Enum field properties
+  enum:
+    contract_type:
+      validation:
+        type: enum
+        error_message: "Invalid contract type for {field}: {value}"
+        values:
+          A: "BPA CALL"
+          B: "PURCHASE ORDER"
+          C: "DELIVERY ORDER"
+          D: "DEFINITIVE CONTRACT"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+          - type: trim
+      fields:
+        - award_type
+        - type
+    
+    idv_type:
+      validation:
+        type: enum
+        error_message: "Invalid IDV type for {field}: {value}"
+        values:
+          A: "BLANKET PURCHASE AGREEMENT"
+          B: "INDEFINITE DELIVERY CONTRACT"
+          C: "FEDERAL SUPPLY SCHEDULE"
+          D: "BASIC ORDERING AGREEMENT"
+          E: "BASIC AGREEMENT"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+          - type: trim
+      fields:
+        - idv_type
+    
+    action_type:
+      validation:
+        type: enum
+        error_message: "Invalid action type for {field}: {value}"
+        values:
+          A: "ADDITIONAL WORK (NEW AGREEMENT, JUSTIFICATION REQUIRED)"
+          B: "SUPPLEMENTAL AGREEMENT FOR WORK WITHIN SCOPE"
+          C: "FUNDING ONLY ACTION"
+          D: "CHANGE ORDER"
+          E: "TERMINATE FOR DEFAULT (COMPLETE OR PARTIAL)"
+          F: "TERMINATE FOR CONVENIENCE (COMPLETE OR PARTIAL)"
+          G: "EXERCISE AN OPTION"
+          H: "DEFINITIZE LETTER CONTRACT"
+          J: "NOVATION AGREEMENT"
+          K: "CLOSE OUT"
+          L: "DEFINITIZE CHANGE ORDER"
+          M: "OTHER ADMINISTRATIVE ACTION"
+          N: "LEGAL CONTRACT CANCELLATION"
+          P: "REREPRESENTATION OF NON-NOVATED MERGER/ACQUISITION"
+          R: "REREPRESENTATION"
+          S: "CHANGE PIID"
+          T: "TRANSFER ACTION"
+          V: "UNIQUE ENTITY ID OR LEGAL BUSINESS NAME CHANGE - NON-NOVATION"
+          W: "ENTITY ADDRESS CHANGE"
+          X: "TERMINATE FOR CAUSE"
+          Y: "ADD SUBCONTRACTING PLAN"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+          - type: trim
+      fields:
+        - action_type
+    
+    contract_pricing:
+      validation:
+        type: enum
+        error_message: "Invalid pricing type for {field}: {value}"
+        values:
+          "A": "FIXED PRICE REDETERMINATION"
+          "B": "FIXED PRICE LEVEL OF EFFORT"  
+          "J": "FIRM FIXED PRICE"
+          "K": "FIXED PRICE WITH ECONOMIC PRICE ADJUSTMENT"
+          "L": "FIXED PRICE INCENTIVE"
+          "M": "FIXED PRICE AWARD FEE"
+          "R": "COST PLUS AWARD FEE"
+          "S": "COST NO FEE"
+          "T": "COST SHARING"
+          "U": "COST PLUS FIXED FEE"
+          "V": "COST PLUS INCENTIVE FEE"
+          "Y": "TIME AND MATERIALS"
+          "Z": "LABOR HOURS"
+          "1": "ORDER DEPENDENT (IDV ALLOWS PRICING ARRANGEMENT TO BE DETERMINED SEPARATELY FOR EACH ORDER)"
+          "2": "COMBINATION (APPLIES TO AWARDS WHERE TWO OR MORE OF THE ABOVE APPLY)"
+          "3": "OTHER (APPLIES TO AWARDS WHERE NONE OF THE ABOVE APPLY)"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+          - type: trim
+      fields:
+        - type_of_contract_pricing_code
+    
+    governmental_functions:
+      validation:
+        type: enum
+        error_message: "Invalid governmental function for {field}: {value}"
+        values:
+          "CL": "CLOSELY ASSOCIATED"
+          "CT": "CRITICAL FUNCTIONS" 
+          "OT": "OTHER FUNCTIONS"
+          "CL,CT": "CLOSELY ASSOCIATED,CRITICAL FUNCTIONS"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+          - type: trim
+      fields:
+        - inherently_governmental_functions
+    
+    yes_no_extended:
+      validation:
+        type: enum
+        error_message: "Invalid option for {field}: {value}"
+        values:
+          "Y": "YES"
+          "N": "NO"
+          "X": "NOT APPLICABLE"
+      transformation:
+        timing: before_validation
+        operations:
+          - type: uppercase
+          - type: trim
+      fields:
+        - "*_indicator"
+        - "has_*"
+        - "is_*"
+  
+  # Boolean field properties
+  boolean:
+    standard:
+      validation:
+        type: boolean
+        error_message: "Invalid boolean value for {field}: {value}"
+        true_values: ["true", "yes", "y", "1", "t", "T"]
+        false_values: ["false", "no", "n", "0", "f", "F"]
+      transformation:
+        timing: before_validation
+        operations:
+          - type: normalize_boolean
+            true_values: ["Y", "YES", "1", "TRUE", "T", "YES, WITHOUT EXCEPTION"]
+            false_values: ["N", "NO", "0", "FALSE", "F"]
+            output: lowercase_string  # "true"/"false"
+      fields:
+        # Transaction indicators
+        - is_fpds
+        - pulled_from_parent
+        # Contract properties
+        - government_furnished_property
+        - multi_year_contract
+        - purchase_card_as_payment_method
+        # Business characteristics
+        - "native_*"
+        - "*_indian_*"
+        - "*_american_*"
+        - "*_owned_*"
+        - "veteran_*"
+        - "*_government*"
+        - "*_institution"
+        - "corporate_entity_*"
+        - "small_*"
+        - "emerging_*"
+        - "receives_*"
+        - "historically_underutilized_*"
+        - international_organization
+        - manufacturer_of_goods
+        - "*_currently_active"
+        - "*_registered"
 
-  business_characteristics:
-    ownership:
-      - alaskan_native_corporation_owned_firm
-      - american_indian_owned_business
-      - indian_tribe_federally_recognized
-      - native_hawaiian_organization_owned_firm
-      - tribally_owned_firm
-      - veteran_owned_business
-      - service_disabled_veteran_owned_business
-      - woman_owned_business
-      - women_owned_small_business
-      - economically_disadvantaged_women_owned_small_business
-      - joint_venture_women_owned_small_business
-      - joint_venture_economic_disadvantaged_women_owned_small_bus
-      - minority_owned_business
-      - subcontinent_asian_asian_indian_american_owned_business
-      - asian_pacific_american_owned_business
-      - black_american_owned_business
-      - hispanic_american_owned_business
-      - native_american_owned_business
-      - other_minority_owned_business
-    structure:
-      - corporate_entity_not_tax_exempt
-      - corporate_entity_tax_exempt
-      - partnership_or_limited_liability_partnership
-      - sole_proprietorship
-      - small_agricultural_cooperative
-      - international_organization
-      - us_government_entity
-    size:
-      - small_disadvantaged_business
-      - emerging_small_business
-      - c8a_program_participant
-      - historically_underutilized_business_zone_hubzone_firm
-  entity_processing:
-    enabled: true
-    processing_order: 2
-    store_type: recipient
+  # Derived field properties
+  derived:
+    fiscal_year:
+      validation:
+        type: integer
+        min_value: 2000
+        max_value: 2100
+        error_message: "Invalid fiscal year value: {value}"
+      transformation:
+        timing: after_validation  # Happens after action_date validation
+        operations:
+          - type: derive_fiscal_year
+            source_field: action_date
+            fiscal_year_start_month: 10  # October
+      fields:
+        - action_date_fiscal_year
 
-# Contracts entity configuration
-contract:
-  key_fields:
-    - contract_award_unique_key
-    - award_id_piid
-  field_mappings:
-    # Direct mappings for key fields
-    contract_award_unique_key: contract_award_unique_key
-    award_id_piid: award_id_piid
-    # Existing mappings
-    award_id: contract_award_unique_key
-    piid: award_id_piid
-    parent_piid: parent_award_id_piid
-    recipient_ref: recipient_uei
-    recipient_parent_ref: recipient_parent_uei
-    description: transaction_description
-    type: award_type
-    base_exercised_options_value: current_total_value_of_award
-    base_and_all_options_value: potential_total_value_of_award
-    total_obligation: total_dollars_obligated
-    performance_start: period_of_performance_start_date
-    performance_end: period_of_performance_current_end_date
-    pricing_code: type_of_contract_pricing_code
-    pricing_description: type_of_contract_pricing
-    prime_award:
-      is_prime: "true"
-      description: prime_award_base_transaction_description
-    agencies:
-      awarding:
-        ref: "{awarding_agency_code}"
-        sub_ref: "{awarding_agency_code}:{awarding_sub_agency_code}"
-        office_ref: "{awarding_agency_code}:{awarding_sub_agency_code}:{awarding_office_code}"
-      funding:
-        ref: "{funding_agency_code}"
-        sub_ref: "{funding_agency_code}:{funding_sub_agency_code}"
-        office_ref: "{funding_agency_code}:{funding_sub_agency_code}:{funding_office_code}"
-      parent_award:
-        ref: "{parent_award_agency_id}"
-    place_of_performance_ref: {
-      type: "place_of_performance", 
-      key_prefix: "primary_place_of_performance",
-      fields: ["country_code", "state_code", "city_name", "county_name", "zip_code"]
-    }
-  relationships:
-    hierarchical:
-      - from_level: parent_contract
-        to_level: child_contract
-        type: PARENT_OF
-        inverse: CHILD_OF
+#==============================================================================
+# 4. ENTITY RELATIONSHIPS
+#==============================================================================
+relationships:
+  # Agency relationships
+  -  # Agency hierarchical relationships
+    id: agency_to_subagency
+    sourceEntity: agency
+    targetEntity: sub_agency
+    sourceProperty: has_subagency
+    targetProperty: belongs_to_agency
+    relationshipType: hierarchical
+    cardinality: one_to_many
+    keyMapping:
+      sourceKey: agency_code
+      targetKey: sub_agency_code
+      compositeKey: true  # Target key includes the source key
+    metadata:
+      description: "Agency to sub-agency organizational relationship"
+  
+  -  # Sub-agency to office relationship
+    id: subagency_to_office
+    sourceEntity: sub_agency
+    targetEntity: office
+    sourceProperty: has_office
+    targetProperty: belongs_to_subagency
+    relationshipType: hierarchical
+    cardinality: one_to_many
+    keyMapping:
+      sourceKey: [agency_code, sub_agency_code]
+      targetKey: office_code
+      compositeKey: true
+    metadata:
+      description: "Sub-agency to office organizational relationship"
+  
+  # Location relationships
+  -  # Location to recipient relationship
+    id: location_to_recipient
+    sourceEntity: location
+    targetEntity: recipient
+    sourceProperty: primary_address_of
+    targetProperty: has_primary_address
+    relationshipType: associative
+    cardinality: one_to_one
+    keyMapping:
+      sourceKey: [country_code, state_code, city_name, county_name, zip_code, address_line_1]
+      targetKey: uei
+    metadata:
+      type: primary_address
+      description: "Location serves as primary address for recipient"
+  
+  -  # Contract to location (place of performance)
+    id: contract_to_performance_location
+    sourceEntity: contract
+    targetEntity: location
+    sourceProperty: performed_at
+    targetProperty: place_of_performance_for
+    relationshipType: associative
+    cardinality: many_to_one
+    keyMapping:
+      sourceKey: contract_award_unique_key
+      targetKey: [country_code, state_code, city_name, county_name, zip_code]
+      targetKeyPrefix: primary_place_of_performance
+    metadata:
+      type: place_of_performance
+      description: "Contract is performed at location"
+  
+  # Recipient relationships
+  -  # Recipient parent-child relationship
+    id: recipient_to_parent
+    sourceEntity: recipient
+    targetEntity: recipient
+    sourceProperty: child_of
+    targetProperty: parent_of
+    relationshipType: hierarchical
+    cardinality: many_to_one
+    keyMapping:
+      sourceKey: uei
+      targetKey: parent_uei
+    metadata:
+      description: "Recipient parent-child organizational relationship"
+  
+  -  # Recipient to contract relationship
+    id: recipient_to_contract
+    sourceEntity: recipient
+    targetEntity: contract
+    sourceProperty: recipient_of
+    targetProperty: awarded_to
+    relationshipType: associative
+    cardinality: one_to_many
+    keyMapping:
+      sourceKey: uei
+      targetKey: contract_award_unique_key
+    metadata:
+      type: primary
+      description: "Recipient is awarded contract"
+  
+  # Contract relationships
+  -  # Contract parent-child relationship
+    id: contract_to_child_contract
+    sourceEntity: contract
+    targetEntity: contract
+    sourceProperty: parent_of
+    targetProperty: child_of
+    relationshipType: hierarchical
+    cardinality: one_to_many
+    keyMapping:
+      sourceKey: piid
+      targetKey: parent_piid
+    metadata:
+      description: "Contract parent-child relationship"
+  
+  -  # Contract to awarding agency relationship
+    id: contract_to_awarding_agency
+    sourceEntity: contract
+    targetEntity: agency
+    sourceProperty: awarded_by
+    targetProperty: awarded
+    relationshipType: associative
+    cardinality: many_to_one
+    keyMapping:
+      sourceKey: contract_award_unique_key
+      targetKey: agency_code
+      targetFieldSource: awarding_agency_code
+    metadata:
+      type: awarding
+      description: "Contract is awarded by agency"
+  
+  -  # Contract to funding agency relationship
+    id: contract_to_funding_agency
+    sourceEntity: contract
+    targetEntity: agency
+    sourceProperty: funded_by
+    targetProperty: funded
+    relationshipType: associative
+    cardinality: many_to_one
+    keyMapping:
+      sourceKey: contract_award_unique_key
+      targetKey: agency_code
+      targetFieldSource: funding_agency_code
+    metadata:
+      type: funding
+      description: "Contract is funded by agency"
+  
+  -  # Contract to parent award agency relationship
+    id: contract_to_parent_award_agency
+    sourceEntity: contract
+    targetEntity: agency
+    sourceProperty: parent_awarded_by
+    targetProperty: parent_awarded
+    relationshipType: associative
+    cardinality: many_to_one
+    keyMapping:
+      sourceKey: contract_award_unique_key
+      targetKey: agency_code
+      targetFieldSource: parent_award_agency_id
+    metadata:
+      type: parent_award
+      description: "Contract parent award is from agency"
+      
+  # Transaction relationships
+  -  # Transaction to contract relationship
+    id: transaction_to_contract
+    sourceEntity: transaction
+    targetEntity: contract
+    sourceProperty: part_of
+    targetProperty: has_transaction
+    relationshipType: associative
+    cardinality: many_to_one  # Many transactions can belong to one contract
+    keyMapping:
+      sourceKey: contract_transaction_unique_key
+      targetKey: contract_award_unique_key
+    metadata:
+      type: transaction
+      description: "Transaction is part of a contract"
+
+#==============================================================================
+# 5. ENTITY DEFINITIONS
+#==============================================================================
+entities:
+  #-----------------------------------
+  # 5.1 Agency Entity
+  #-----------------------------------
+  agency:
+    # Description: Represents government agencies that award or fund contracts
+    key_fields:
+      - agency_code
+      - sub_agency_code
+      - office_code
+    
+    field_mappings:
+      direct: {}  # No direct mappings for agency
+      
+      multi_source:
+        agency_code:
+          sources: ["awarding_agency_code", "funding_agency_code", "parent_award_agency_id"]
+          strategy: first_non_empty
+        agency_name:
+          sources: ["awarding_agency_name", "funding_agency_name", "parent_award_agency_name"]
+          strategy: first_non_empty
+        sub_agency_code:
+          sources: ["awarding_sub_agency_code", "funding_sub_agency_code"]
+          strategy: first_non_empty
+        sub_agency_name:
+          sources: ["awarding_sub_agency_name", "funding_sub_agency_name"]
+          strategy: first_non_empty
+        office_code:
+          sources: ["awarding_office_code", "funding_office_code"]
+          strategy: first_non_empty
+        office_name:
+          sources: ["awarding_office_name", "funding_office_name"]
+          strategy: first_non_empty
+      
+      object: {}  # No object mappings for agency
+      reference: {}  # No reference mappings for agency
+      template: {}  # No template mappings for agency
+    
+    relationships:
+      - agency_to_subagency
+      - subagency_to_office
+      - contract_to_awarding_agency
+      - contract_to_funding_agency
+      - contract_to_parent_award_agency
+    
+    entity_processing:
+      enabled: true
+      processing_order: 1
+      store_type: agency
+      dependencies: []  # No dependencies - processed first
+      processing_options:
+        validation_level: strict
+        error_handling: abort  # Critical entity - abort on errors
+      concurrency:
+        enabled: true
+        max_workers: 2
+
+  #-----------------------------------
+  # 5.2 Location Entity
+  #-----------------------------------
+  location:
+    # Description: Represents geographic locations associated with recipients or contract performance
+    key_fields:
+      - country_code
+      - state_code
+      - city_name
+      - county_name
+      - zip_code
+      - address_line_1
+    
+    field_mappings:
+      direct: {}  # No simple direct mappings
+      
+      multi_source:
+        country_code:
+          sources: ["recipient_country_code", "primary_place_of_performance_country_code"]
+          strategy: first_non_empty
+        country_name:
+          sources: ["recipient_country_name", "primary_place_of_performance_country_name"]
+          strategy: first_non_empty
+        state_code:
+          sources: ["recipient_state_code", "primary_place_of_performance_state_code"]
+          strategy: first_non_empty
+        state_name:
+          sources: ["recipient_state_name", "primary_place_of_performance_state_name"]
+          strategy: first_non_empty
+        city_name:
+          sources: ["recipient_city_name", "primary_place_of_performance_city_name"]
+          strategy: first_non_empty
+        county_name:
+          sources: ["recipient_county_name", "primary_place_of_performance_county_name"]
+          strategy: first_non_empty
+        zip_code:
+          sources: ["recipient_zip_4_code", "primary_place_of_performance_zip_4"]
+          strategy: first_non_empty
+        congressional_district:
+          sources: ["prime_award_transaction_recipient_cd_current", "prime_award_transaction_place_of_performance_cd_current"]
+          strategy: first_non_empty
+      
+      object:
+        address:
+          type: object
+          fields:
+            line1: recipient_address_line_1
+            line2: recipient_address_line_2
+      
+      reference: {}  # No reference mappings for location
+      template: {}  # No template mappings for location
+    
+    relationships:
+      - location_to_recipient
+      - contract_to_performance_location
+    
+    entity_processing:
+      enabled: true
+      processing_order: 5
+      store_type: location
+      dependencies:
+        - entity: recipient
+          type: referenced_by
+          relationship: location_to_recipient
+        - entity: contract
+          type: referenced_by
+          relationship: contract_to_performance_location
+      processing_options:
+        validation_level: strict
+        error_handling: skip
+      concurrency:
+        enabled: true
+        max_workers: 4
+
+  #-----------------------------------
+  # 5.3 Recipient Entity
+  #-----------------------------------
+  recipient:
+    # Description: Represents organizations that receive contract awards
+    key_fields:
+      - uei
+    
+    field_mappings:
+      direct:
+        # Basic identification fields
+        uei: recipient_uei
+        parent_uei: recipient_parent_uei
+        name: recipient_name
+        dba_name: recipient_doing_business_as_name
+        parent_name: recipient_parent_name
+        
+        # Boolean business characteristics - consolidated from categorized sections
+        # Ownership characteristics
+        alaskan_native_corporation_owned_firm: alaskan_native_corporation_owned_firm
+        american_indian_owned_business: american_indian_owned_business
+        indian_tribe_federally_recognized: indian_tribe_federally_recognized
+        native_hawaiian_organization_owned_firm: native_hawaiian_organization_owned_firm
+        tribally_owned_firm: tribally_owned_firm
+        veteran_owned_business: veteran_owned_business
+        service_disabled_veteran_owned_business: service_disabled_veteran_owned_business
+        woman_owned_business: woman_owned_business
+        women_owned_small_business: women_owned_small_business
+        economically_disadvantaged_women_owned_small_business: economically_disadvantaged_women_owned_small_business
+        joint_venture_women_owned_small_business: joint_venture_women_owned_small_business
+        joint_venture_economic_disadvantaged_women_owned_small_bus: joint_venture_economic_disadvantaged_women_owned_small_bus
+        minority_owned_business: minority_owned_business
+        subcontinent_asian_asian_indian_american_owned_business: subcontinent_asian_asian_indian_american_owned_business
+        asian_pacific_american_owned_business: asian_pacific_american_owned_business
+        black_american_owned_business: black_american_owned_business
+        hispanic_american_owned_business: hispanic_american_owned_business
+        native_american_owned_business: native_american_owned_business
+        other_minority_owned_business: other_minority_owned_business
+        
+        # Entity structure characteristics
+        corporate_entity_not_tax_exempt: corporate_entity_not_tax_exempt
+        corporate_entity_tax_exempt: corporate_entity_tax_exempt
+        partnership_or_limited_liability_partnership: partnership_or_limited_liability_partnership
+        sole_proprietorship: sole_proprietorship
+        small_agricultural_cooperative: small_agricultural_cooperative
+        international_organization: international_organization
+        us_government_entity: us_government_entity
+        manufacturer_of_goods: manufacturer_of_goods
+        
+        # Size characteristics
+        small_business: small_business
+        small_disadvantaged_business: small_disadvantaged_business
+        emerging_small_business: emerging_small_business
+        c8a_program_participant: c8a_program_participant
+        historically_underutilized_business_zone_hubzone_firm: historically_underutilized_business_zone_hubzone_firm
+        
+        # Education characteristics (from data dictionary)
+        land_grant_college_1862: 1862_land_grant_college
+        land_grant_college_1890: 1890_land_grant_college  
+        land_grant_college_1994: 1994_land_grant_college
+        historically_black_college_or_university: historically_black_college
+        minority_institution: minority_institution
+        school_of_forestry: school_of_forestry
+        veterinary_college: veterinary_college
+        hispanic_servicing_institution: hispanic_servicing_institution
+        
+        # Other business characteristics
+        foreign_owned_and_located: foreign_owned_and_located
+        for_profit_organization: for_profit_organization
+        nonprofit_organization: nonprofit_organization
+        other_not_for_profit_organization: other_not_for_profit_organization
+        community_developed_corporation_owned_firm: community_developed_corporation_owned_firm
+        labor_surplus_area_firm: labor_surplus_area_firm
+        
+        # Registration status
+        sam_registered: sam_registered
+        sam_entity_information_currently_active: sam_entity_information_currently_active
+      
+      multi_source: {}  # No multi-source mappings for recipient
+      
+      object:
+        naics:
+          type: object
+          fields:
+            code: naics_code
+            description: naics_description
+        
+        contact:
+          type: object
+          fields:
+            phone: recipient_phone_number
+            fax: recipient_fax_number
+            type: primary
+      
+      reference:
+        location_ref:
+          type: entity_reference
+          entity: location
+          reference_type: primary_address
+          key_prefix: recipient
+          key_fields: ["country_code", "state_code", "city_name", "county_name", "zip_code", "address_line_1", "address_line_2"]
+      
+      template: {}  # No template mappings for recipient
+    
+    relationships:
+      - recipient_to_parent
+      - recipient_to_contract
+      - location_to_recipient
+    
+    entity_processing:
+      enabled: true
+      processing_order: 2
+      store_type: recipient
+      dependencies:
+        - entity: location
+          type: references
+          relationship: location_to_recipient
+        - entity: recipient  # Self-reference for parent/child
+          type: references
+          relationship: recipient_to_parent
+      processing_options:
+        validation_level: strict
+        error_handling: skip
+      concurrency:
+        enabled: true
+        max_workers: 4
+
+  #-----------------------------------
+  # 5.4 Contract Entity
+  #-----------------------------------
+  contract:
+    # Description: Represents contract awards from federal agencies to recipients
+    key_fields:
+      - contract_award_unique_key
+    
+    field_mappings:
+      direct:
+        contract_award_unique_key: contract_award_unique_key
+        award_id_piid: award_id_piid
+        award_id: contract_award_unique_key
+        piid: award_id_piid
+        parent_piid: parent_award_id_piid
+        description: transaction_description
+        type: award_type
+        performance_start: period_of_performance_start_date
+        performance_end: period_of_performance_current_end_date
+      
+      multi_source: {}  # No multi-source mappings for contract
+      
+      object:
+        historical_totals:
+          type: object
+          fields:
+            as_of_date: last_modified_date
+          nested_objects:
+            total_contract_values:
+              type: object
+              fields:
+                base_and_exercised_options_value: current_total_value_of_award
+                base_and_all_potential_options_value: base_and_all_options_value
+                cumulative_contract_obligations: total_dollars_obligated
+                potential_total_value_of_award: potential_total_value_of_award
+        
+        type_of_contract:
+          type: object
+          fields:
+            pricing_code: type_of_contract_pricing_code
+            pricing_description: type_of_contract_pricing
+        
+        prime_award:
+          type: object
+          fields:
+            is_prime: "true"
+            description: prime_award_base_transaction_description
+      
+      reference:
+        recipient_ref:
+          type: entity_reference
+          entity: recipient
+          key_field: recipient_uei
+        
+        recipient_parent_ref:
+          type: entity_reference
+          entity: recipient
+          key_field: recipient_parent_uei
+        
+        place_of_performance_ref:
+          type: entity_reference
+          entity: location
+          reference_type: place_of_performance
+          key_prefix: primary_place_of_performance
+          key_fields: ["country_code", "state_code", "city_name", "county_name", "zip_code"]
+      
+      template:
+        agencies:
+          type: object
+          fields:
+            awarding:
+              type: template
+              templates:
+                ref: "{awarding_agency_code}"
+                sub_ref: "{awarding_agency_code}:{awarding_sub_agency_code}"
+                office_ref: "{awarding_agency_code}:{awarding_sub_agency_code}:{awarding_office_code}"
+            funding:
+              type: template
+              templates:
+                ref: "{funding_agency_code}"
+                sub_ref: "{funding_agency_code}:{funding_sub_agency_code}"
+                office_ref: "{funding_agency_code}:{funding_sub_agency_code}:{funding_office_code}"
+            parent_award:
+              type: template
+              templates:
+                ref: "{parent_award_agency_id}"
+    
+    # Fixed relationship references
+    relationships:
+      - contract_to_performance_location
+      - contract_to_child_contract
+      - contract_to_awarding_agency
+      - contract_to_funding_agency
+      - contract_to_parent_award_agency
+      - recipient_to_contract
+      - transaction_to_contract
+    
+    entity_processing:
+      enabled: true
+      processing_order: 3
+      store_type: contract
+      dependencies:
+        - entity: agency
+          type: references
+          relationship: contract_to_awarding_agency
+        - entity: agency
+          type: references
+          relationship: contract_to_funding_agency
+        - entity: recipient
+          type: references
+          relationship: recipient_to_contract
+        - entity: location
+          type: references
+          relationship: contract_to_performance_location
+        - entity: contract  # Self-reference for parent/child
+          type: references
+          relationship: contract_to_child_contract
+      processing_options:
+        validation_level: strict
+        error_handling: skip
+      concurrency:
+        enabled: true
+        max_workers: 6
+  
+  #-----------------------------------
+  # 5.5 Transaction Entity
+  #-----------------------------------
+  transaction:
+    # Description: Represents individual contract transactions and modifications
+    key_fields:
+      - contract_transaction_unique_key
+    
+    field_mappings:
+      direct:
+        contract_transaction_unique_key: contract_transaction_unique_key
+        transaction_id: contract_transaction_unique_key
+        action_date: action_date
+        action_type: action_type
+        modification_number: modification_number
+        description: transaction_description
+        federal_action_obligation: federal_action_obligation
+        created_at: created_date
+        last_modified_at: last_modified_date
+      
+      multi_source: {}  # No multi-source mappings for transaction
+      
+      object:
+        modification_details:
+          type: object
+          fields:
+            number: modification_number
+            description: transaction_description
+            type: action_type
+        
+        financial_details:
+          type: object
+          fields:
+            obligation_amount: federal_action_obligation
+            base_exercised_options_val: current_total_value_of_award
+            base_and_all_options_value: potential_total_value_of_award
+      
+      reference:
+        contract_ref:
+          type: entity_reference
+          entity: contract
+          key_field: contract_award_unique_key
+      
+      template: {}  # No template mappings for transaction
+    
+    relationships:
+      - transaction_to_contract
+    
+    entity_processing:
+      enabled: true
+      processing_order: 4
+      store_type: transaction
+      dependencies:
+        - entity: contract
+          type: required
+          relationship: transaction_to_contract
+      processing_options:
+        validation_level: strict
+        error_handling: log
+      concurrency:
+        enabled: true
+        max_workers: 8
+
+#==============================================================================
+# 6. DOCUMENTATION
+#==============================================================================
+documentation:
+  # Schema version information
+  version: "1.0.0"
+  last_updated: "2025-03-02"
+  author: "USASpending Team"
+  
+  # Documentation links
+  references:
+    data_dictionary: "https://www.usaspending.gov/data-dictionary"
+    api_documentation: "https://api.usaspending.gov/docs/endpoints"
+    file_formats: "https://www.usaspending.gov/download_center/custom_award_data"
+
+  # Entity documentation
+  entities:
     agency:
-      - type: awarding
-        from_field: contract_award_unique_key
-        to_field: awarding_agency_code
-        relationship: AWARDED_BY
-        inverse: AWARDED
-      - type: funding
-        from_field: contract_award_unique_key
-        to_field: funding_agency_code
-        relationship: FUNDED_BY
-        inverse: FUNDED
-      - type: parent_award
-        from_field: contract_award_unique_key
-        to_field: parent_award_agency_id
-        relationship: PARENT_AWARDED_BY
-        inverse: PARENT_AWARDED
-  entity_processing:
-    enabled: true
-    processing_order: 3
-    store_type: contract
-
-# Transaction entity configuration
-transaction:
-  key_fields:
-    - contract_transaction_unique_key
-  field_mappings:
-    contract_transaction_unique_key: contract_transaction_unique_key
-    transaction_key: contract_transaction_unique_key
-    action_date: action_date
-    action_type: action_type
-    modification_number: modification_number
-    description: transaction_description
-    obligation_amount: federal_action_obligation
-    value_mappings:
-      base_exercised_options_value: current_total_value_of_award
-      base_and_all_options_value: potential_total_value_of_award
-  field_patterns:
-    - transaction_
-    - action_
-  exclude_fields:
-    - transaction_unique_id
-    - last_transaction_id
-  entity_processing:
-    enabled: true
-    processing_order: 4
-    store_type: transaction
+      description: "Federal agencies involved in contracting as either awarding or funding entities"
+      example_queries:
+        - "Find all contracts awarded by Department of Defense (agency_code=097)"
+        - "Get funding breakdown by sub-agency for Health and Human Services"
+    
+    location:
+      description: "Physical locations for recipients or places of contract performance"
+      example_queries:
+        - "Find all contracts performed in California"
+        - "List recipients by congressional district"
+    
+    recipient:
+      description: "Organizations or individuals that receive contract awards"
+      example_queries:
+        - "Find all small business recipients"
+        - "Get contracts awarded to woman-owned businesses"
+    
+    contract:
+      description: "Federal contract awards representing legal agreements between agencies and recipients"
+      example_queries:
+        - "List all contracts with obligations over $1 million"
+        - "Find contracts with performance period ending in 2025"
+    
+    transaction:
+      description: "Individual actions or modifications related to a contract"
+      example_queries:
+        - "Get all modifications to a specific contract"
+        - "Find funding-only actions in Q4 2024"

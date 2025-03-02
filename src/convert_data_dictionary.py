@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Convert USASpending Data Dictionary from CSV to JSON format."""
-from usaspending.config import load_config, setup_logging
-from usaspending.dictionary import csv_to_json
+"""Converts USASpending data dictionary to internal format."""
+import csv
+from pathlib import Path
+from usaspending.config import ConfigManager
+from usaspending.logging_config import configure_logging, get_logger
 
-def main():
-    """Main entry point for data dictionary conversion."""
-    logger = setup_logging(output_file='dictionary_conversion.log',
-                         debug_file='dictionary_debug.log')
-    
+def convert_dictionary(input_path: str, output_path: str) -> None:
+    """Convert data dictionary from CSV to internal format."""
     try:
+        config_manager = ConfigManager('config/data_dictionary.yaml')
+        config = config_manager.config.get('data_dictionary', {})
         # Only load and validate data dictionary section
-        config = load_config(section='data_dictionary')
         if csv_to_json(config):
             logger.info("Data dictionary conversion completed successfully")
         else:
@@ -20,6 +20,20 @@ def main():
         return False
     
     return True
+
+def main():
+    """Main entry point for data dictionary conversion."""
+    # Initialize logging
+    configure_logging(
+        output_file='dictionary_conversion.log',
+        debug_file='dictionary_debug.log'
+    )
+    
+    logger = get_logger(__name__)
+    
+    input_path = 'path/to/input.csv'
+    output_path = 'path/to/output.json'
+    convert_dictionary(input_path, output_path)
 
 if __name__ == "__main__":
     main()

@@ -1,18 +1,54 @@
-bak_fy2024_contract_transactions.json
+# Python virtual environment
+venv/
+env/
+.env/
+.venv/
 
-# Output directories
-output/
-*.tmp
-src/usaspending/__pycache__/
+# Python bytecode
 __pycache__/
-.mypy_cache/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+coverage.xml
+*.cover
+*.py,cover
 .pytest_cache/
-.env
-FY2024_015_Contracts_Full_20250109_1.csv
-USASpending_Data_Dictionary_Crosswalk.csv
-USASpending_Data_Dictionary_Crosswalk.json
-bak_fy2024_contract_transactions.json
-USASpending_Data_Dictionary_Crosswalk.json
+
+# IDEs and editors
+.idea/
 .vscode/
-src/usaspending.egg-info/
-dummy_CSV_data.csv
+*.swp
+*.swo
+*.swn
+.vs/
+
+# Project-specific files
+*.log
+logs/
+output/
+*.csv
+*.json
+!dummy_CSV_data.csv
+!USASpending_Data_Dictionary_Crosswalk.csv
+!bak_fy2024_contract_transactions.json
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+USASpending_Data_Dictionary_Crosswalk.csv
+bak_fy2024_contract_transactions.json
+*.log

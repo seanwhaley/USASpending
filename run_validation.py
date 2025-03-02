@@ -1,13 +1,9 @@
 #!/usr/bin/env python
 """
-Script to run validation on USASpending data.
-
-This script shows how to use the validation framework with process_transactions.py.
+Data validation runner.
 """
 import sys
-import os
 import argparse
-import logging
 from pathlib import Path
 
 # Add project root to path
@@ -15,10 +11,11 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.usaspending.config import load_config, setup_logging
-from src.usaspending.processor import convert_csv_to_json
+from src.usaspending.logging_config import configure_logging, get_logger
+from src.usaspending.validation import validate_data
+from src.usaspending.config import ConfigManager
 
-def main():
+def main() -> int:
     """Run validation on USASpending data."""
     parser = argparse.ArgumentParser(description="Run validation on USASpending data")
     parser.add_argument(
@@ -37,24 +34,24 @@ def main():
         default="INFO", 
         help="Set the logging level"
     )
+    parser.add_argument('--log-file', help='Path to log file')
+    parser.add_argument('--debug-file', help='Path to debug log file')
     
     args = parser.parse_args()
     
-    # Setup logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler("validation.log"),
-            logging.StreamHandler()
-        ]
+    # Initialize logging before any other operations
+    configure_logging(
+        level=args.log_level,
+        output_file=args.log_file,
+        debug_file=args.debug_file
     )
     
-    logger = logging.getLogger(__name__)
+    logger = get_logger(__name__)
+    logger.info("Starting data validation")
     
-    # Load configuration
     try:
-        config = load_config(args.config)
+        config_manager = ConfigManager(args.config)
+        config = config_manager.config
         
         # Override skip_invalid_rows if specified
         if args.skip_invalid:
@@ -71,20 +68,15 @@ def main():
             config['contracts']['input'] = {}
         config['contracts']['input']['validate_input'] = True
         
-        # Save modified config if needed
-        # (uncomment if you want to save changes)
-        # with open(args.config, 'w') as f:
-        #     yaml.dump(config, f)
-        
-        # Run conversion with validation
+        # Run validation
         logger.info("Starting validation process...")
-        success = convert_csv_to_json(args.config)
+        success = validate_data(config)
         
         if success:
-            logger.info("Validation and conversion completed successfully!")
+            logger.info("Validation completed successfully!")
             return 0
         else:
-            logger.error("Validation and conversion failed!")
+            logger.error("Validation failed!")
             return 1
         
     except Exception as e:

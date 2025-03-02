@@ -6,6 +6,11 @@ import json
 import logging
 from datetime import datetime
 
+from .file_utils import (
+    write_json_file, read_json_file, ensure_directory, 
+    backup_file, safe_delete, atomic_replace, FileOperationError
+)
+
 logger = logging.getLogger(__name__)
 
 class EntitySerializer:
@@ -69,9 +74,7 @@ class EntitySerializer:
             
             # Create directory if needed
             output_dir = os.path.dirname(self.file_path)
-            if not os.path.exists(output_dir):
-                logger.info(f"Creating output directory: {output_dir}")
-                os.makedirs(output_dir, exist_ok=True)
+            ensure_directory(output_dir)
 
             # Estimate size and determine save strategy
             estimated_size = self.estimate_json_size(cache, relationships)
@@ -100,12 +103,9 @@ class EntitySerializer:
             # Clean up any existing temp file first
             self._cleanup_temp_files()
             
-            # Ensure target file is not locked/readonly if it exists
+            # Create backup if file exists
             if os.path.exists(self.file_path):
-                try:
-                    os.chmod(self.file_path, 0o666)
-                except OSError as e:
-                    logger.warning(f"Could not modify permissions on {self.file_path}: {e}")
+                backup_file(self.file_path)
             
             # Prepare output data
             output_data = {
@@ -115,26 +115,15 @@ class EntitySerializer:
                                 for k, v in relationships.items()}
             }
             
-            # Write to temporary file first
-            with open(self.temp_file_path, 'w', encoding=self.encoding) as f:
-                json.dump(output_data, f, indent=indent, ensure_ascii=False)
-            
-            # Ensure temp file has right permissions
-            try:
-                os.chmod(self.temp_file_path, 0o666)
-            except OSError as e:
-                logger.warning(f"Could not set permissions on temp file: {e}")
-                
-            # Rename temp file to final file
-            try:
-                os.replace(self.temp_file_path, self.file_path)
-            except OSError as e:
-                # If replace fails, try removing target first
-                try:
-                    os.remove(self.file_path)
-                    os.rename(self.temp_file_path, self.file_path)
-                except OSError as e2:
-                    raise OSError(f"Failed to save file after multiple attempts: {e2}")
+            # Write data atomically
+            write_json_file(
+                self.file_path, 
+                output_data, 
+                encoding=self.encoding, 
+                indent=indent,
+                ensure_ascii=False,
+                atomic=True
+            )
             
         except Exception as e:
             logger.error(f"Error saving single file: {str(e)}", exc_info=True)
@@ -172,7 +161,7 @@ class EntitySerializer:
             
             # Create temporary directory for atomic operations
             temp_dir = Path(base_path).parent / ".tmp"
-            temp_dir.mkdir(exist_ok=True)
+            ensure_directory(str(temp_dir))
             
             created_files = []
             try:
@@ -192,13 +181,17 @@ class EntitySerializer:
                 
                 # Save index file atomically
                 index_file = f"{base_path}_index.json"
-                temp_index_file = temp_dir / "index.json.tmp"
+                temp_index_file = str(temp_dir / "index.json.tmp")
                 logger.info(f"Writing index file to {index_file}")
                 
-                with open(temp_index_file, 'w', encoding=self.encoding) as f:
-                    json.dump(index_data, f, indent=indent, ensure_ascii=False)
-                
-                os.replace(temp_index_file, index_file)
+                write_json_file(
+                    index_file, 
+                    index_data, 
+                    encoding=self.encoding, 
+                    indent=indent, 
+                    ensure_ascii=False,
+                    atomic=True
+                )
                 created_files.append(index_file)
                 
                 logger.info(f"Successfully saved {partition_count} partitions with index")
@@ -207,9 +200,8 @@ class EntitySerializer:
                 # Clean up any created files on error
                 for file in created_files:
                     try:
-                        if os.path.exists(file):
-                            os.remove(file)
-                    except OSError:
+                        safe_delete(file)
+                    except Exception:
                         pass
                 raise
                 
@@ -218,7 +210,7 @@ class EntitySerializer:
                 try:
                     if temp_dir.exists():
                         for file in temp_dir.iterdir():
-                            file.unlink()
+                            safe_delete(str(file))
                         temp_dir.rmdir()
                 except OSError as e:
                     logger.warning(f"Error cleaning up temp directory: {e}")
@@ -239,11 +231,17 @@ class EntitySerializer:
             }
             
             # Write partition to file
-            with open(partition_file, 'w', encoding=self.encoding) as f:
-                json.dump({
+            write_json_file(
+                partition_file,
+                {
                     "metadata": partition_metadata,
                     "entities": partition
-                }, f, indent=indent, ensure_ascii=False)
+                },
+                encoding=self.encoding,
+                indent=indent,
+                ensure_ascii=False,
+                atomic=True
+            )
             
             return partition_metadata
             
@@ -255,7 +253,7 @@ class EntitySerializer:
         """Clean up any temporary files."""
         try:
             if os.path.exists(self.temp_file_path):
-                os.remove(self.temp_file_path)
+                safe_delete(self.temp_file_path)
         except Exception as e:
             logger.warning(f"Error cleaning up temp file: {str(e)}")
 
@@ -265,8 +263,7 @@ class EntitySerializer:
             return None
             
         try:
-            with open(self.file_path, 'r', encoding=self.encoding) as f:
-                return json.load(f)
-        except Exception as e:
+            return read_json_file(self.file_path, encoding=self.encoding)
+        except FileOperationError as e:
             logger.error(f"Error loading entity data: {str(e)}")
             return None

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Command-line tool to validate a USASpending configuration YAML file."""
+"""Configuration validation tool."""
 import argparse
 import sys
 import json
@@ -11,11 +11,12 @@ from colorama import Fore, Style
 src_dir = Path(__file__).resolve().parent / 'src'
 sys.path.insert(0, str(src_dir))
 
-from usaspending.config import load_config
+from src.usaspending.config import ConfigManager
 from usaspending.config_validator import ConfigValidationError, get_schema_description
 from usaspending.types import ConfigType
+from src.usaspending.logging_config import configure_logging, get_logger
 
-def main():
+def main() -> int:
     """Main entry point for the validation script."""
     colorama.init()  # Initialize colorama for colored output
     
@@ -43,7 +44,8 @@ Examples:
     
     try:
         print(f"{Fore.CYAN}Validating configuration file: {args.config_file}{Style.RESET_ALL}")
-        config = load_config(args.config_file)
+        config_manager = ConfigManager(args.config_file)
+        config = config_manager.config
         print(f"{Fore.GREEN}✓ Configuration is valid!{Style.RESET_ALL}")
         
         if args.verbose:
