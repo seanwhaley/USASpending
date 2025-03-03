@@ -79,9 +79,9 @@ class ValidationRule:
 class ValidationResult:
     """Result of a validation check."""
     valid: bool
-    message: Optional[str] = None
-    error_type: Optional[str] = None
     field_name: Optional[str] = None
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
 
 # Statistics Types
 @dataclass

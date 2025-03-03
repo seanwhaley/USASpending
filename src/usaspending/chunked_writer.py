@@ -17,11 +17,12 @@ logger = get_logger(__name__)
 class ChunkedWriter:
     """Manages writing records in chunks with optimized batching and error handling."""
     
-    def __init__(self, base_path: str, config: Dict[str, Any], field_selector: Optional[FieldSelector] = None, chunk_size: Optional[int] = None) -> None:
+    def __init__(self, base_path: str, config: Dict[str, Any], output_dir: str = None, field_selector: Optional[FieldSelector] = None, chunk_size: Optional[int] = None) -> None:
         """Initialize chunked writer with configuration."""
         self.base_path = Path(base_path)
         self.config = config
         self.field_selector = field_selector
+        self.output_dir = Path(output_dir) if output_dir else self.base_path.parent
         
         # Initialize settings from config
         self._init_config()
@@ -36,40 +37,52 @@ class ChunkedWriter:
         
     def _init_config(self) -> None:
         """Initialize configuration settings."""
-        # Change from global.processing to system.processing
+        # Use system.io settings for file configuration
+        io_config = self.config.get('system', {}).get('io', {})
+        if not io_config:
+            raise ChunkingError("Missing system.io configuration section")
+            
+        # Use system.processing for processing settings
         proc_config = self.config.get('system', {}).get('processing', {})
         if not proc_config:
             raise ChunkingError("Missing system.processing configuration section")
         
         # Core settings
         self.chunk_size = self._get_chunk_size(proc_config)
-        self.max_chunk_size_mb = proc_config.get('max_chunk_size_mb')
-        self.batch_size = proc_config.get('batch_size', 1000)
+        self.max_chunk_size_mb = proc_config.get('max_chunk_size_mb', 100)
+        self.batch_size = io_config.get('input', {}).get('batch_size', 1000)
         
-        # File format settings
-        file_formats = self.config.get('global', {}).get('file_formats', {})
-        self.json_indent = file_formats.get('json', {}).get('indent', 2)
-        self.json_ensure_ascii = file_formats.get('json', {}).get('ensure_ascii', False)
-        self.encoding = file_formats.get('encoding', 'utf-8')
+        # File format settings from system.formats
+        formats_config = self.config.get('system', {}).get('formats', {})
+        json_config = formats_config.get('json', {})
+        self.json_indent = json_config.get('indent', 2)
+        self.json_ensure_ascii = json_config.get('ensure_ascii', False)
+        self.encoding = formats_config.get('csv', {}).get('encoding', 'utf-8-sig')
         
     def _get_chunk_size(self, proc_config: Dict[str, Any]) -> int:
         """Get chunk size from config or override."""
         chunk_size = proc_config.get('records_per_chunk')
         if not chunk_size:
-            raise ChunkingError("records_per_chunk required in global.processing config")
+            raise ChunkingError("records_per_chunk required in system.processing config")
         return chunk_size
         
     def _init_validation(self) -> None:
         """Initialize validation if enabled."""
         self.validator = None
-        if self.config['global']['input'].get('validate_input', True):
+        input_config = self.config.get('system', {}).get('io', {}).get('input', {})
+        if input_config.get('validate_input', True):
             self.validator = ValidationEngine(self.config)
             logger.debug("Validation engine initialized for ChunkedWriter")
             
-            result = self.validator.validate_chunk_config()
-            if not result.valid:
-                raise ChunkingError(f"Chunk configuration error: {result.message}")
-                
+            # Initialize validation for chunking specifically
+            try:
+                if hasattr(self.validator, 'validate_chunk_config'):
+                    result = self.validator.validate_chunk_config()
+                    if not result.valid:
+                        raise ChunkingError(f"Chunk configuration error: {result.message}")
+            except AttributeError:
+                logger.warning("Chunk configuration validation not available")
+
     def _init_fields(self) -> None:
         """Initialize field tracking."""
         self.keep_fields = self._collect_essential_fields()
@@ -104,6 +117,12 @@ class ChunkedWriter:
         """Build set of fields to exclude from processed records."""
         excluded = set()
         
+        # Get exclusions from system config
+        pattern_exceptions = (self.config.get('system', {})
+                            .get('io', {})
+                            .get('input', {})
+                            .get('field_pattern_exceptions', []))
+        
         for cfg in self.config.values():
             if not isinstance(cfg, dict):
                 continue
@@ -119,9 +138,8 @@ class ChunkedWriter:
                         
             # Handle field patterns
             if 'field_patterns' in cfg:
-                exceptions = self.config.get('global', {}).get('field_pattern_exceptions', [])
                 excluded.update(pattern for pattern in cfg['field_patterns']
-                              if pattern not in exceptions)
+                              if pattern not in pattern_exceptions)
                               
             # Handle explicit exclusions
             if 'exclude_fields' in cfg:

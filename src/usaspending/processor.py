@@ -19,6 +19,7 @@ from .file_utils import (
     csv_reader, backup_file, safe_delete, ensure_directory,
     FileOperationError, FileNotFoundError
 )
+from usaspending.config import ConfigManager
 
 # Type aliases for complex types
 EntityRef: TypeAlias = Union[str, Dict[str, str]]
@@ -78,36 +79,54 @@ def process_record(record: Dict[str, Any],
                   validator: Optional['ValidationEngine'] = None) -> bool:
     """Process a single record with validation and error handling."""
     try:
+        logger.debug(f"Processing record with keys: {list(record.keys())}")
+        
         # Validate record if validator is present
         if validator:
+            logger.debug("Starting record validation")
             validation_results = validator.validate_record(record, entity_stores)
             invalid_results = [r for r in validation_results if not r.valid]
+            
             if invalid_results:
                 error_details = [{
                     'entity': result.field_name.split('.')[0] if '.' in result.field_name else 'unknown',
                     'field': result.field_name,
-                    'message': result.error_message,  # Use error_message instead of message
-                    'error_type': result.error_type
+                    'message': result.error_message,
+                    'error_type': result.error_type,
+                    'value': record.get(result.field_name, '<not found>')
                 } for result in invalid_results]
                 
-                # Check config safely
+                logger.debug(f"Validation errors found:\n{json.dumps(error_details, indent=2)}")
+                
                 skip_invalid = writer.config.get('system', {}).get('io', {}).get('input', {}).get('skip_invalid_rows', False)
                 if not skip_invalid:
-                    raise ValidationError(
-                        f"Validation failed for record: {json.dumps(error_details, indent=2)}"
-                    )
+                    error_msg = f"Validation failed for record: {json.dumps(error_details, indent=2)}"
+                    logger.error(error_msg)
+                    raise ValidationError(error_msg)
+                    
                 logger.warning(f"Skipping invalid record: {json.dumps(error_details)}")
                 return False
+            
+            logger.debug("Record validation passed")
 
         # Process entities and relationships
+        logger.debug("Starting entity data processing")
         updated_record = process_entity_data(entity_stores, record, writer.config)
+        
+        # Log any fields that were updated
+        diff_fields = {k: v for k, v in updated_record.items() if k not in record or record[k] != v}
+        if diff_fields:
+            logger.debug(f"Fields updated during processing: {list(diff_fields.keys())}")
+            
         writer.add_record(updated_record)
+        logger.debug("Record successfully processed and added to writer")
         return True
         
     except ValidationError:
         raise
     except Exception as e:
         logger.error(f"Unexpected error processing record: {str(e)}", exc_info=True)
+        logger.debug(f"Failed record content:\n{json.dumps(record, indent=2)}")
         raise ProcessingError(f"Error processing record: {str(e)}") from e
 
 def process_entity_data(entity_stores: Dict[str, 'EntityStore'], 
@@ -127,25 +146,31 @@ def process_entity_data(entity_stores: Dict[str, 'EntityStore'],
             if entity_config.get('entity_processing', {}).get('enabled', True):
                 order = entity_config.get('entity_processing', {}).get('processing_order', 999)
                 processing_order.append((order, entity_type))
-                
+        
         # Sort by processing order
         processing_order.sort()
+        logger.debug(f"Entity processing order: {[et for _, et in processing_order]}")
         
         # Process entities in order
         for order, entity_type in processing_order:
             if (entity_type not in entity_stores):
+                logger.debug(f"Skipping {entity_type} - no store configured")
                 continue
                 
             store = entity_stores[entity_type]
             try:
                 # Extract and validate entity data
+                logger.debug(f"Extracting data for {entity_type}")
                 entity_data = store.extract_entity_data(record)
                 if not entity_data:
+                    logger.debug(f"No valid data extracted for {entity_type}")
                     continue
 
                 # Add entity to store and get reference key(s)
+                logger.debug(f"Adding {entity_type} to store")
                 refs = store.add_entity(entity_data)
                 if not refs:
+                    logger.debug(f"No references generated for {entity_type}")
                     continue
                     
                 # Store processed entity info for relationship processing
@@ -156,22 +181,28 @@ def process_entity_data(entity_stores: Dict[str, 'EntityStore'],
                 
                 # Update record with reference(s)
                 if isinstance(refs, str):
-                    updated_record[f"{entity_type}_ref"] = refs
+                    ref_field = f"{entity_type}_ref"
+                    updated_record[ref_field] = refs
+                    logger.debug(f"Added {ref_field}: {refs}")
                 elif isinstance(refs, dict):
                     for k, v in refs.items():
-                        updated_record[f"{entity_type}_{k}_ref"] = str(v)
+                        ref_field = f"{entity_type}_{k}_ref"
+                        updated_record[ref_field] = str(v)
+                        logger.debug(f"Added {ref_field}: {v}")
 
                 logger.debug(
-                    f"Processed {entity_type} entity:\n"
+                    f"Successfully processed {entity_type} entity:\n"
                     f"Data: {json.dumps(entity_data, indent=2)}\n"
                     f"Refs: {json.dumps(refs, indent=2) if isinstance(refs, dict) else refs}"
                 )
                     
             except EntityError as e:
-                logger.error(f"Error processing {entity_type} entity: {str(e)}")
+                logger.error(f"Error processing {entity_type} entity: {str(e)}", exc_info=True)
+                logger.debug(f"Failed entity data: {json.dumps(record, indent=2)}")
                 continue
 
         # Process relationships after all entities are created
+        logger.debug(f"Processing relationships for entities: {list(processed_entities.keys())}")
         for entity_type, store in entity_stores.items():
             if entity_type in processed_entities:
                 entity_info = processed_entities[entity_type]
@@ -189,13 +220,17 @@ def process_entity_data(entity_stores: Dict[str, 'EntityStore'],
                     # Handle both string and dictionary references
                     if isinstance(refs, str):
                         relationship_context['references']['primary'] = refs
+                        logger.debug(f"Added primary reference for {entity_type}: {refs}")
                     else:
                         relationship_context['references'].update(refs)
+                        logger.debug(f"Added reference mapping for {entity_type}: {refs}")
                     
+                    logger.debug(f"Processing relationships for {entity_type} with context:\n{json.dumps(relationship_context, indent=2)}")
                     store.process_relationships(entity_data, relationship_context)
                     
                 except Exception as e:
-                    logger.error(f"Error processing relationships for {entity_type}: {str(e)}")
+                    logger.error(f"Error processing relationships for {entity_type}: {str(e)}", exc_info=True)
+                    logger.debug(f"Failed relationship context: {json.dumps(relationship_context, indent=2)}")
                     continue
         
         return updated_record
@@ -204,7 +239,8 @@ def process_entity_data(entity_stores: Dict[str, 'EntityStore'],
         skip_invalid = config.get('system', {}).get('io', {}).get('input', {}).get('skip_invalid_rows', False)
         if not skip_invalid:
             raise
-        logger.error(f"Error in entity processing: {str(e)}")
+        logger.error(f"Error in entity processing: {str(e)}", exc_info=True)
+        logger.debug(f"Failed record: {json.dumps(record, indent=2)}")
         return record
 
 def save_entity_stores(stores: Dict[str, EntityStore], partial: bool = False, version: Optional[int] = None) -> None:
@@ -282,107 +318,115 @@ def cleanup_backups(stores: Dict[str, EntityStore], max_version: int) -> None:
             except Exception as e:
                 logger.warning(f"Failed to remove backup: {backup}, error: {str(e)}")
 
-def convert_csv_to_json(config_manager) -> bool:
-    """Convert CSV data to JSON output using the provided configuration.
+def convert_csv_to_json(config_manager: ConfigManager) -> bool:
+    """Convert CSV data to JSON with full processing pipeline.
     
     Args:
-        config_manager: A ConfigManager instance or compatible object
-                       that provides configuration access
-    
+        config_manager: Configuration manager instance
+        
     Returns:
-        bool: True if conversion succeeded, False otherwise
+        bool: True if conversion was successful, False otherwise
     """
     try:
-        try:
-            config = config_manager.get_config()
-            # Validate required config sections
-            if 'system' not in config:
-                raise ConfigurationError("Missing 'system' configuration section")
-            if 'io' not in config['system']:
-                raise ConfigurationError("Missing 'system.io' configuration section")
-            if 'input' not in config['system']['io']:
-                raise ConfigurationError("Missing 'system.io.input' configuration section")
-            if 'output' not in config['system']['io']:
-                raise ConfigurationError("Missing 'system.io.output' configuration section")
-            if 'processing' not in config['system']:
-                raise ConfigurationError("Missing 'system.processing' configuration section")
-            if 'formats' not in config['system']:
-                raise ConfigurationError("Missing 'system.formats' configuration section")
-        except ConfigurationError as e:
-            logger.error(f"Failed to load configuration: {e}")
-            raise ProcessingError("Configuration error") from e
-        except Exception as e:
-            logger.error(f"Failed to access configuration: {str(e)}")
-            raise ProcessingError(f"Configuration access error: {str(e)}") from e
-
-        system_config = config['system']
-        input_config = system_config['io']['input']
-        output_config = system_config['io']['output']
+        config_data = config_manager.get_config()
+        logger.debug(f"Starting conversion with configuration:\n{json.dumps(config_data, indent=2)}")
+        
+        # Extract key configuration
+        system_config = config_data.get('system', {})
+        io_config = system_config.get('io', {})
+        input_config = io_config.get('input', {})
+        output_config = io_config.get('output', {})
+        processing_config = system_config.get('processing', {})
         
         input_file = Path(input_config['file'])
         output_dir = Path(output_config['directory'])
+        entities_dir = output_dir / output_config.get('entities_subfolder', 'entities')
+        batch_size = input_config.get('batch_size', 1000)
+        
+        logger.info(f"Processing input file: {input_file}")
+        logger.info(f"Output directory: {output_dir}")
+        logger.info(f"Entities directory: {entities_dir}")
+        logger.info(f"Batch size: {batch_size}")
 
-        # Check if input file exists
         if not input_file.exists():
             logger.error(f"Input file does not exist: {input_file}")
             return False
 
-        # Initialize components
-        validator = ValidationEngine(config)
-        entity_factory = EntityFactory(config)
+        # Create output directories
+        output_dir.mkdir(parents=True, exist_ok=True)
+        entities_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create the base output path using output directory
-        output_base = output_dir / output_config.get('base_filename', 'output')
-        writer = ChunkedWriter(output_base, config)
+        # Initialize processing components
+        validator = ValidationEngine(config_data) if input_config.get('validate_input', True) else None
+        writer = ChunkedWriter(
+            output_dir=str(output_dir),
+            config=config_data,
+            chunk_size=processing_config.get('records_per_chunk', 10000),
+            max_chunk_size_mb=processing_config.get('max_chunk_size_mb', 100)
+        )
+        factory = EntityFactory(config_data)
+        entity_stores = factory.create_stores(base_path=str(entities_dir))
         stats = ProcessingStats()
 
-        # Create output directory if it doesn't exist
-        ensure_directory(output_dir)
-        ensure_directory(output_dir / output_config.get('entities_subfolder', 'entities'))
+        logger.info("Initialized processing pipeline components:")
+        logger.info(f"- Validation enabled: {validator is not None}")
+        logger.info(f"- Entity stores created: {', '.join(entity_stores.keys())}")
+        
+        try:
+            record_count = 0
+            save_frequency = processing_config.get('entity_save_frequency', 10000)
+            log_frequency = processing_config.get('log_frequency', 1000)
+            current_batch = []
 
-        # Initialize entity stores
-        stores = {}
-        for entity_type, entity_config in config_manager.get_entity_configs().items():
-            if entity_config.get('entity_processing', {}).get('enabled', True):
-                stores[entity_type] = entity_factory.create_store(entity_type)
+            logger.info("Starting record processing")
+            for record in csv_reader(str(input_file)):
+                record_count += 1
+                current_batch.append(record)
+                
+                # Process batch if we've reached batch size
+                if len(current_batch) >= batch_size:
+                    for batch_record in current_batch:
+                        if process_record(batch_record, writer, entity_stores, validator):
+                            stats.processed += 1
+                        else:
+                            stats.validation_failures += 1
+                    current_batch = []
+                
+                # Log progress periodically
+                if record_count % log_frequency == 0:
+                    stats.log_progress(record_count, log_frequency)
+                
+                # Save entity stores periodically
+                if record_count % save_frequency == 0:
+                    logger.info(f"Saving entity stores at record {record_count:,d}")
+                    save_entity_stores(entity_stores, partial=True)
 
-        # Process records
-        batch_size = input_config.get('batch_size', 1000)
-        with csv_reader(input_file, 
-                       encoding=system_config['formats']['csv'].get('encoding', 'utf-8'),
-                       delimiter=system_config['formats']['csv'].get('delimiter', ','),
-                       quotechar=system_config['formats']['csv'].get('quotechar', '"')) as reader:
-            for i, record in enumerate(reader, 1):
-                try:
-                    if process_record(record, writer, stores, validator):
+            # Process any remaining records
+            if current_batch:
+                for batch_record in current_batch:
+                    if process_record(batch_record, writer, entity_stores, validator):
                         stats.processed += 1
                     else:
                         stats.validation_failures += 1
-                except ValidationError as ve:
-                    stats.validation_failures += 1
-                    logger.warning(f"Validation error in record {i}: {str(ve)}")
-                except Exception as e:
-                    stats.errors += 1
-                    logger.error(f"Error processing record {i}: {str(e)}")
 
-                # Progress logging
-                if i % batch_size == 0:
-                    stats.log_progress(i, batch_size)
+            # Final save of entity stores
+            logger.info("Processing complete, saving final entity stores")
+            save_entity_stores(entity_stores)
+            
+            # Log final statistics
+            stats.log_completion(writer, entity_stores)
+            logger.info("Conversion completed successfully")
+            return True
 
-                # Save entity stores periodically
-                if i % system_config['processing']['entity_save_frequency'] == 0:
-                    save_entity_stores(stores, partial=True, version=i)
+        except Exception as e:
+            logger.error(f"Error during record processing: {str(e)}", exc_info=True)
+            return False
 
-        # Final saves and cleanup
-        writer.close()
-        save_entity_stores(stores)
-        cleanup_backups(stores, max_version=5)
-
-        # Log completion statistics
-        stats.log_completion(writer, stores)
-        return True
-
+    except KeyError as e:
+        logger.error(f"Missing required configuration key: {str(e)}")
+        logger.debug("Configuration error details:", exc_info=True)
+        return False
     except Exception as e:
-        logger.error(f"Conversion failed: {str(e)}")
-        logger.debug("Stack trace:", exc_info=True)
+        logger.error(f"Unexpected error during conversion: {str(e)}")
+        logger.debug("Error details:", exc_info=True)
         return False

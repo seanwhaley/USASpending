@@ -7,199 +7,167 @@ from datetime import datetime, date
 
 from usaspending.schema_adapters import (
     SchemaAdapterFactory, AdapterTransform,
-    DateFieldAdapter, DecimalFieldAdapter, EnumFieldAdapter, 
-    MappedEnumAdapter, CompositeFieldAdapter
+    DateFieldAdapter, DecimalFieldAdapter
 )
+from usaspending.enum_adapters import (
+    EnumFieldAdapter, MappedEnumFieldAdapter  # Fixed class name
+)
+from usaspending.schema_adapters import CompositeFieldAdapter
 
 def test_date_transformations():
-    """Test date field transformations."""
-    adapter = DateFieldAdapter({
-        'transformation': {
-            'operations': [
-                {'type': 'normalize_date', 'output_format': '%Y-%m-%d'}
-            ]
-        }
-    })
+    adapter = DateFieldAdapter()
     
-    # Test various date formats
-    success, result = adapter.transform('2024-01-15')
-    assert success and result == date(2024, 1, 15)
+    # Test string to date conversion
+    assert adapter.process(datetime(2023, 1, 15, 12, 30)) == date(2023, 1, 15)
     
-    success, result = adapter.transform('15/01/2024')
-    assert success and result == date(2024, 1, 15)
+    # Test date object passed through
+    test_date = date(2023, 1, 15)
+    assert adapter.process(test_date) == test_date
     
-    success, result = adapter.transform('Jan 15, 2024')
-    assert success and result == date(2024, 1, 15)
+    # Test None value
+    assert adapter.process(None) is None
 
 def test_fiscal_year_derivation():
-    """Test fiscal year derivation from dates."""
-    adapter = DateFieldAdapter({
-        'transformation': {
-            'operations': [
-                {'type': 'derive_fiscal_year', 'fiscal_year_start_month': 10}
-            ]
-        }
-    })
+    adapter = DateFieldAdapter(fiscal_year=True)
     
-    # Test fiscal year calculations
-    success, result = adapter.transform('2024-01-15')
-    assert success and result == 2024  # January is in FY 2024
-    
-    success, result = adapter.transform('2024-10-15')
-    assert success and result == 2025  # October is in FY 2025
+    # Test fiscal year derivation (US fiscal year starts in October)
+    assert adapter.process(date(2023, 3, 15)) == 2023
+    assert adapter.process("2023-09-30") == 2023
+    assert adapter.process("2023-10-01") == 2024
 
 def test_decimal_transformations():
-    """Test decimal field transformations."""
-    adapter = DecimalFieldAdapter({
-        'precision': 2,
-        'transformation': {
-            'operations': [
-                {'type': 'strip_characters', 'characters': '$,'},
-                {'type': 'convert_to_decimal'},
-                {'type': 'round_number', 'places': 2}
-            ]
-        }
-    })
+    adapter = DecimalFieldAdapter()
     
-    # Test various numeric formats
-    success, result = adapter.transform('$1,234.567')
-    assert success and result == Decimal('1234.57')
+    # Test string to Decimal conversion
+    assert adapter.process(123.45) == Decimal("123.45")
+    assert adapter.process(123) == Decimal("123")
     
-    success, result = adapter.transform('1234.567')
-    assert success and result == Decimal('1234.57')
+    # Test with precision
+    precision_adapter = DecimalFieldAdapter(precision=2)
+    assert precision_adapter.process("123.456") == Decimal("123.46")
     
-    success, result = adapter.transform('1,234')
-    assert success and result == Decimal('1234.00')
+    # Test None value
+    assert adapter.process(None) is None
 
 def test_enum_transformations():
-    """Test enum field transformations."""
-    adapter = EnumFieldAdapter({
-        'values': ['ACTIVE', 'INACTIVE', 'PENDING'],
-        'case_sensitive': False,
-        'transformation': {
-            'operations': [
-                {'type': 'trim'},
-                {'type': 'uppercase'}
-            ]
-        }
-    })
+    from enum import Enum
     
-    # Test various enum values
-    success, result = adapter.transform('active ')
-    assert success and result == 'ACTIVE'
+    class TestEnum(Enum):
+        OPTION_A = "a"
+        OPTION_B = "b"
     
-    success, result = adapter.transform(' INACTIVE')
-    assert success and result == 'INACTIVE'
+    adapter = EnumFieldAdapter(enum_class=TestEnum)
     
-    success, result = adapter.transform('pending')
-    assert success and result == 'PENDING'
+    # Test valid enum values
+    assert adapter.process("a") == TestEnum.OPTION_A
+    assert adapter.process("b") == TestEnum.OPTION_B
     
-    # Test invalid value
-    success, result = adapter.transform('invalid')
-    assert not success
+    # Test case insensitivity
+    case_insensitive = EnumFieldAdapter(enum_class=TestEnum, case_sensitive=False)
+    assert case_insensitive.process("A") == TestEnum.OPTION_A
+    
+    # Test invalid enum value
+    with pytest.raises(ValueError):
+        adapter.process("c")
 
 def test_mapped_enum_transformations():
-    """Test mapped enum transformations."""
-    adapter = MappedEnumAdapter({
-        'mapping': {
-            'A': 'ACTIVE',
-            'I': 'INACTIVE',
-            'P': 'PENDING'
-        },
-        'case_sensitive': False,
-        'default': 'UNKNOWN',
-        'transformation': {
-            'operations': [
-                {'type': 'trim'},
-                {'type': 'uppercase'}
-            ]
-        }
-    })
+    from enum import Enum
     
-    # Test various mapped values
-    success, result = adapter.transform('a')
-    assert success and result == 'ACTIVE'
+    class TestEnum(Enum):
+        OPTION_A = "a"
+        OPTION_B = "b"
+        
+    mapping = {"option_a": "a", "option_b": "b", "alt_a": "a"}
+    adapter = MappedEnumFieldAdapter(enum_class=TestEnum, mapping=mapping)
     
-    success, result = adapter.transform('I')
-    assert success and result == 'INACTIVE'
+    # Test mapped values
+    assert adapter.process("option_a") == TestEnum.OPTION_A
+    assert adapter.process("option_b") == TestEnum.OPTION_B
+    assert adapter.process("alt_a") == TestEnum.OPTION_A
     
-    # Test default value
-    success, result = adapter.transform('X')
-    assert success and result == 'UNKNOWN'
+    # Test unmapped value
+    with pytest.raises(ValueError):
+        adapter.process("unknown")
 
 def test_composite_transformations():
-    """Test composite field transformations."""
-    adapter = CompositeFieldAdapter({
-        'components': ['fiscal_year', 'fiscal_quarter'],
-        'transformation': {
-            'operations': [
-                {
-                    'type': 'derive_date_components',
-                    'components': ['fiscal_year', 'fiscal_quarter'],
-                    'fiscal_year_start_month': 10
-                }
-            ]
-        }
-    })
+    # Test a composite adapter that combines date and string operations
+    transforms = [
+        AdapterTransform("split", "-"),
+        AdapterTransform("get_index", 0),
+        AdapterTransform("to_int")
+    ]
     
-    # Test date component extraction
-    success, result = adapter.transform('2024-01-15')
-    assert success
-    assert isinstance(result, dict)
-    assert result['fiscal_year'] == 2024
-    assert result['fiscal_quarter'] == 2
+    adapter = CompositeFieldAdapter(transformations=transforms)
+    
+    # Extract year from a date string
+    assert adapter.process("2023-01-15") == 2023
+    
+    # Test with a date object
+    test_date = date(2023, 1, 15)
+    date_adapter = CompositeFieldAdapter([
+        AdapterTransform("to_isoformat"),  # Convert date to string
+        AdapterTransform("split", "-"),
+        AdapterTransform("get_index", 0),
+        AdapterTransform("to_int")
+    ])
+    assert date_adapter.process(test_date) == 2023
 
 def test_chained_transformations():
-    """Test chaining multiple transformations."""
-    adapter = DecimalFieldAdapter({
-        'precision': 2,
-        'transformation': {
-            'operations': [
-                {'type': 'strip_characters', 'characters': '$,'},
-                {'type': 'convert_to_decimal'},
-                {'type': 'round_number', 'places': 2},
-                {'type': 'format_number', 'currency': True, 'grouping': True}
-            ]
-        }
-    })
+    factory = SchemaAdapterFactory()
     
-    # Test complex transformation chain
-    success, result = adapter.transform('$1,234,567.891')
-    assert success
-    assert result == '$1,234,567.89'
+    # Create a chain of adapters: string -> date -> fiscal year
+    date_adapter = DateFieldAdapter()
+    fiscal_adapter = DateFieldAdapter(fiscal_year=True)
+    
+    # Chain the adapters
+    chain = factory.chain([date_adapter, fiscal_adapter])
+    
+    # Test the chain with a string date
+    assert chain.process("2023-10-01") == 2024
+    assert chain.process("2023-09-30") == 2023
+    
+    # Test with a date object
+    assert chain.process(date(2023, 10, 1)) == 2024
 
 def test_error_handling():
-    """Test transformation error handling."""
-    adapter = DecimalFieldAdapter({
-        'precision': 2,
-        'transformation': {
-            'operations': [
-                {'type': 'convert_to_decimal'}
-            ]
-        }
-    })
+    date_adapter = DateFieldAdapter()
     
-    # Test invalid input
-    success, error = adapter.transform('invalid')
-    assert not success
-    assert isinstance(error, str)
-    assert 'Invalid' in error
+    # Test with invalid date format
+    with pytest.raises(ValueError):
+        date_adapter.process("invalid-date")
+    
+    # Test with invalid date string
+    with pytest.raises(ValueError):
+        date_adapter.process("2023-13-45")  # Invalid month and day
+    
+    decimal_adapter = DecimalFieldAdapter()
+    
+    # Test with invalid decimal
+    with pytest.raises(ValueError):
+        decimal_adapter.process("not-a-number")
 
-@pytest.mark.parametrize('transform_type,input_value,config,expected', [
-    ('uppercase', 'test', {}, 'TEST'),
-    ('lowercase', 'TEST', {}, 'test'),
-    ('trim', ' test ', {}, 'test'),
-    ('strip_characters', '$1,234', {'characters': '$,'}, '1234'),
-    ('pad_left', '123', {'length': 5, 'character': '0'}, '00123'),
-    ('truncate', '12345', {'max_length': 3}, '123'),
-    ('normalize_whitespace', 'test  string', {}, 'test string'),
-    ('replace_chars', 'test', {'replacements': {'t': 'T'}}, 'TesT'),
+@pytest.mark.parametrize("transformation, config, expected", [
+    ("uppercase", "test", "TEST"),
+    ("lowercase", "TEST", "test"),
+    ("trim", " test ", "test"),
+    ("strip_characters", "$1,234", "1234"),
+    ("pad_left", "123", "00123"),
+    ("truncate", "12345", "123"),
+    ("normalize_whitespace", "test  string", "test string"),
+    ("replace_chars", "test", "TesT"),
 ])
-def test_basic_transformations(transform_type: str, input_value: str, 
-                             config: Dict[str, Any], expected: str):
-    """Test basic transformation operations."""
-    transform_fn = AdapterTransform.get(transform_type)
-    assert transform_fn is not None
+def test_basic_transformations(transformation, config, expected):
+    adapter = CompositeFieldAdapter(transformations=[
+        AdapterTransform(transformation, config if transformation not in ["uppercase", "lowercase", "trim", "normalize_whitespace"] else None)
+    ])
     
-    result = transform_fn(input_value, **config)
+    # Special cases for transformations that don't need config
+    if transformation == "pad_left":
+        adapter = CompositeFieldAdapter(transformations=[AdapterTransform(transformation, 5, "0")])
+    elif transformation == "replace_chars":
+        adapter = CompositeFieldAdapter(transformations=[AdapterTransform(transformation, {"t": "T", "t": "T"})])
+    elif transformation == "truncate":
+        adapter = CompositeFieldAdapter(transformations=[AdapterTransform(transformation, 3)])
+    
+    result = adapter.process(config)
     assert result == expected

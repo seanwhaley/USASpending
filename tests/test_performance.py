@@ -5,19 +5,37 @@ import os
 import csv
 import json
 import shutil
+import yaml
 from pathlib import Path
 from typing import Dict, Any, List
 from datetime import datetime
 
-from src.usaspending.processor import convert_csv_to_json
-from src.usaspending.entity_store import EntityStore
-from src.usaspending.config import ConfigManager
-from src.usaspending.chunked_writer import ChunkedWriter
-from src.usaspending.validation import ValidationEngine
+from usaspending.processor import convert_csv_to_json
+from usaspending.entity_store import EntityStore
+from usaspending.config import ConfigManager
+from usaspending.chunked_writer import ChunkedWriter
+from usaspending.validation import ValidationEngine
 
 # Test data directory setup
 PERF_DATA_DIR = Path(__file__).parent / "perf_data"
 PERF_DATA_DIR.mkdir(exist_ok=True)
+
+@pytest.fixture
+def sample_config():
+    """Return a sample configuration for validation testing."""
+    return {
+        'field_properties': {
+            'field1': {'type': 'string'},
+            'field2': {'type': 'numeric'}
+        }
+    }
+
+def create_temp_config_file(config_data):
+    """Create a temporary config file with the provided data"""
+    temp_config_path = PERF_DATA_DIR / "temp_test_config.yaml"
+    with open(temp_config_path, 'w') as f:
+        yaml.dump(config_data, f)
+    return temp_config_path
 
 def generate_test_data(num_records: int) -> List[Dict[str, str]]:
     """Generate test transaction data."""
@@ -66,6 +84,54 @@ class PerformanceConfig:
     ) -> Dict[str, Any]:
         """Create test configuration with specified parameters."""
         return {
+            "key_fields": ["contract_id", "recipient_id"],
+            "field_mappings": {
+                "direct": {
+                    "contract_id": {"field": "contract_id"},
+                    "recipient_id": {"field": "recipient_id"}
+                }
+            },
+            "entity_processing": {
+                "enabled": True,
+                "processing_order": 1
+            },
+            "entities": {
+                "contract": {
+                    "enabled": True,
+                    "key_fields": ["contract_id"],
+                    "field_mappings": {
+                        "direct": {
+                            "id": {"field": "contract_id"},
+                            "description": {"field": "contract_description"},
+                            "amount": {
+                                "field": "contract_amount",
+                                "transformation": {
+                                    "type": "money",
+                                    "pre": [{"operation": "strip", "characters": "$,"}]
+                                }
+                            }
+                        }
+                    },
+                    "entity_processing": {
+                        "enabled": True,
+                        "processing_order": 1
+                    }
+                },
+                "recipient": {
+                    "enabled": True,
+                    "key_fields": ["recipient_id"],
+                    "field_mappings": {
+                        "direct": {
+                            "id": {"field": "recipient_id"},
+                            "name": {"field": "recipient_name"}
+                        }
+                    },
+                    "entity_processing": {
+                        "enabled": True,
+                        "processing_order": 2
+                    }
+                }
+            },
             "global": {
                 "processing": {
                     "records_per_chunk": chunk_size,
@@ -178,8 +244,8 @@ class TestBatchSizes:
         for batch_size in batch_sizes:
             # Create config with specific batch size
             config = PerformanceConfig.create(batch_size=batch_size)
-            config_manager = ConfigManager()
-            config_manager._config = config  # Set the config directly for testing
+            config_path = create_temp_config_file(config)
+            config_manager = ConfigManager(str(config_path))
             
             # Process with current batch size and measure performance
             start_time = time.time()
@@ -217,8 +283,8 @@ class TestValidationPerformance:
         config_without_validation = PerformanceConfig.create(skip_validation=True)
         
         # Process with validation
-        config_manager = ConfigManager()
-        config_manager._config = config_with_validation
+        config_path_with = create_temp_config_file(config_with_validation)
+        config_manager = ConfigManager(str(config_path_with))
         
         start_time = time.time()
         convert_csv_to_json(config_manager)
@@ -232,7 +298,8 @@ class TestValidationPerformance:
         (output_dir / "entities").mkdir(exist_ok=True)
         
         # Process without validation
-        config_manager._config = config_without_validation
+        config_path_without = create_temp_config_file(config_without_validation)
+        config_manager = ConfigManager(str(config_path_without))
         
         start_time = time.time()
         convert_csv_to_json(config_manager)
@@ -261,8 +328,8 @@ class TestChunkingPerformance:
         for chunk_size in chunk_sizes:
             # Create config with specific chunk size
             config = PerformanceConfig.create(chunk_size=chunk_size)
-            config_manager = ConfigManager()
-            config_manager._config = config
+            config_path = create_temp_config_file(config)
+            config_manager = ConfigManager(str(config_path))
             
             # Process with current chunk size and measure performance
             start_time = time.time()
@@ -306,13 +373,35 @@ class TestEntityStorePerformance:
         config["system"]["processing"]["entity_save_frequency"] = entity_save_frequency
         
         # Set up config and process
-        config_manager = ConfigManager()
-        config_manager._config = config
+        config_path = create_temp_config_file(config)
+        config_manager = ConfigManager(str(config_path))
         
         start_time = time.time()
         convert_csv_to_json(config_manager)
         processing_time = time.time() - start_time
         
         # We're not making assertions here, just collecting performance data
-        # In a real benchmark, you would compare these values or log them
         print(f"Entity save frequency {entity_save_frequency}: {processing_time:.3f} seconds")
+
+@pytest.mark.parametrize("num_records", [1000])
+def test_validation_impact_basic(sample_config, num_records):
+    """Test the performance impact of validation."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}  # Provide an empty entity_stores dictionary
+    
+    # Measure processing time without validation
+    start_time = time.time()
+    for _ in range(num_records):
+        pass  # Simulate processing without validation
+    no_validation_time = time.time() - start_time
+    
+    # Measure processing time with validation
+    start_time = time.time()
+    for _ in range(num_records):
+        engine.validate_record(record, entity_stores)
+    validation_time = time.time() - start_time
+    
+    # Calculate validation overhead
+    overhead = validation_time / no_validation_time
+    assert overhead <= 2.0, f"Validation overhead should be reasonable (currently {overhead:.1f}x)"

@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
+from usaspending.validation import ValidationEngine, ValidationResult
 
 @pytest.fixture
 def mock_engine():
@@ -43,6 +44,14 @@ def mock_engine():
     
     return engine
 
+@pytest.fixture
+def sample_config():
+    return {
+        'field_properties': {
+            'field1': {'type': 'string'},
+            'field2': {'type': 'numeric'}
+        }
+    }
 
 class TestValidation:
     """Tests for validation functionality."""
@@ -298,3 +307,75 @@ class TestValidation:
         # dep1 validator should be called only once despite appearing twice in dependencies
         mock_validator1.is_validated.assert_called_once()
         mock_validator2.is_validated.assert_called_once()
+
+def test_missing_validator(sample_config):
+    """Test missing validator handling."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1'}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_validator_raises_exception(sample_config):
+    """Test handling of exceptions raised by validators."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1'}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_custom_record(sample_config):
+    """Test validation with a custom record."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_many_dependencies(sample_config):
+    """Test validation with many dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_unvalidated_dependencies(sample_config):
+    """Test validation with unvalidated dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_validated_dependencies(sample_config):
+    """Test validation with validated dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_circular_dependencies(sample_config):
+    """Test validation with circular dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_mixed_dependencies(sample_config):
+    """Test validation with mixed dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_duplicate_dependencies(sample_config):
+    """Test validation with duplicate dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)

@@ -7,6 +7,14 @@ import re
 from collections import defaultdict
 import uuid
 
+# Replace this import
+# import logging
+# logger = logging.getLogger(__name__)
+
+# With this import instead
+from src.usaspending.logging_config import get_logger
+logger = get_logger(__name__)
+
 import pydantic
 from marshmallow import Schema, fields
 from dateutil import parser
@@ -34,6 +42,7 @@ class TransformationPipeline(Generic[T, U]):
         self.composed_transforms: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         self.dependencies: Dict[str, Set[str]] = defaultdict(set)
         self.metadata: Dict[str, Any] = {}
+        logger.debug("Initialized new TransformationPipeline")
         
     def add_transformation(self, transform_fn: callable, config: Optional[Dict[str, Any]] = None,
                          depends_on: Optional[List[str]] = None,
@@ -55,14 +64,17 @@ class TransformationPipeline(Generic[T, U]):
         if depends_on:
             for dep in depends_on:
                 self.dependencies[transform_config['id']].add(dep)
+                logger.debug(f"Added dependency {dep} for transform {transform_config['id']}")
                 
         if provides:
             transform_config['provides'] = provides
             # Add to composed transforms if it has dependencies
             if depends_on:
                 self.composed_transforms[provides].append(transform_config)
+                logger.debug(f"Added composed transform {transform_config['id']} providing {provides}")
             
         self.transformations.append(transform_config)
+        logger.debug(f"Added transformation {transform_config['id']}: {transform_fn.__name__}")
         
     def execute(self, value: Any) -> TransformationResult[T, U]:
         """Execute all transformations in sequence with dependency handling."""
@@ -71,39 +83,45 @@ class TransformationPipeline(Generic[T, U]):
         transform_outputs: Dict[str, Any] = {}
         
         try:
+            logger.debug(f"Starting transformation pipeline execution with initial value: {value}")
+            
             # First run independent transforms
             for transform in self.transformations:
                 if not self.dependencies[transform['id']]:
+                    logger.debug(f"Executing independent transform {transform['id']}: {transform['function'].__name__}")
                     current_value = self._execute_transform(transform, current_value)
                     if 'provides' in transform:
                         transform_outputs[transform['provides']] = current_value
+                        logger.debug(f"Transform {transform['id']} produced output for {transform['provides']}")
             
             # Then run dependent transforms in order
             for output_name, transforms in self.composed_transforms.items():
+                logger.debug(f"Processing composed transforms for output {output_name}")
                 for transform in transforms:
-                    # Check if dependencies are met
                     deps = self.dependencies[transform['id']]
-                    if all(dep in transform_outputs for dep in deps):
-                        # Update config with dependency outputs
-                        config = transform['config'].copy()
+                    if all(d in transform_outputs for d in deps):
+                        logger.debug(f"All dependencies met for transform {transform['id']}")
+                        config = transform['config']
                         for dep in deps:
                             config[f"dep_{dep}"] = transform_outputs[dep]
-                            
                         current_value = transform['function'](current_value, **config)
                         transform_outputs[output_name] = current_value
+                        logger.debug(f"Completed dependent transform {transform['id']} for {output_name}")
                         
             result = TransformationResult(True, current_value)
             result.metadata['transform_outputs'] = transform_outputs
+            logger.debug("Transformation pipeline completed successfully")
             
         except Exception as e:
+            logger.error(f"Transformation pipeline failed: {str(e)}", exc_info=True)
             result = TransformationResult(False, str(e))
-            
+                        
         return result
-    
+
     def _execute_transform(self, transform: Dict[str, Any], value: Any) -> Any:
         """Execute a single transformation."""
         return transform['function'](value, **transform['config'])
-        
+
     def _topological_sort(self) -> List[Dict[str, Any]]:
         """Sort transformations by dependencies."""
         in_degree = defaultdict(int)
@@ -125,7 +143,6 @@ class TransformationPipeline(Generic[T, U]):
         while queue:
             node = queue.pop(0)
             sorted_ids.append(node)
-            
             for neighbor in graph[node]:
                 in_degree[neighbor] -= 1
                 if in_degree[neighbor] == 0:
@@ -133,16 +150,26 @@ class TransformationPipeline(Generic[T, U]):
                     
         if len(sorted_ids) != len(self.transformations):
             raise ValueError("Circular dependency detected in transformations")
-            
+        
         # Map back to transform configs
         id_to_transform = {t['id']: t for t in self.transformations}
         return [id_to_transform[id_] for id_ in sorted_ids]
 
 class AdapterTransform:
-    """Registry for adapter transformations."""
-    
+    """Transform registry and instance class for field adapters."""
+            
     _transforms: Dict[str, callable] = {}
     
+    def __init__(self, transform_type: str, *args, **kwargs):
+        """Initialize transform instance with type and arguments."""
+        self.transform_type = transform_type
+        self.args = args
+        self.kwargs = kwargs
+        
+        # Verify transform exists
+        if transform_type not in self._transforms:
+            raise ValueError(f"Unknown transform type: {transform_type}")
+            
     @classmethod
     def register(cls, name: str) -> callable:
         """Register a transformation function."""
@@ -150,12 +177,25 @@ class AdapterTransform:
             cls._transforms[name] = fn
             return fn
         return decorator
-    
+
     @classmethod
     def get(cls, name: str) -> Optional[callable]:
         """Get a registered transformation function."""
         return cls._transforms.get(name)
-        
+    
+    def __call__(self, value: Any) -> Any:
+        """Execute the transformation on a value."""
+        transform_fn = self._transforms[self.transform_type]
+        return transform_fn(value, *self.args, self.kwargs)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert transform to dictionary representation."""
+        return {
+            'type': self.transform_type,
+            **{f'arg{i}': arg for i, arg in enumerate(self.args)},
+            **self.kwargs
+        }
+
 # Built-in transformations
 @AdapterTransform.register('uppercase')
 def transform_uppercase(value: str) -> str:
@@ -245,7 +285,6 @@ def transform_derive_fiscal_year(value: str, fiscal_year_start_month: int = 10,
             dt = datetime.strptime(value, input_format)
         else:
             dt = parser.parse(value)
-        
         if dt.month >= fiscal_year_start_month:
             return dt.year + 1
         return dt.year
@@ -263,7 +302,6 @@ def transform_derive_date_components(value: str,
             dt = datetime.strptime(value, input_format)
         else:
             dt = parser.parse(value)
-        
         result = {}
         for component in components:
             if component == 'year':
@@ -310,7 +348,6 @@ def transform_format_number(value: Union[int, float, Decimal, str],
     try:
         if isinstance(value, str):
             value = float(value.strip().replace(',', ''))
-            
         # Format with specified precision
         formatted = f"{float(value):,.{precision}f}" if grouping else f"{float(value):.{precision}f}"
         
@@ -339,7 +376,6 @@ def transform_map_values(value: str, mapping: Dict[str, Any],
         for k, v in mapping.items():
             if str(k).upper() == upper_value:
                 return v
-    
     # Return default if specified, otherwise original value
     return default if default is not None else value
 
@@ -357,7 +393,6 @@ def transform_normalize_enum(value: str, valid_values: Set[str],
         for v in valid_values:
             if v.upper() == upper_value:
                 return v
-    
     # Return default if specified, otherwise original value
     return default if default is not None else value
 
@@ -380,16 +415,59 @@ def transform_extract_pattern(value: str, pattern: str) -> str:
     match = re.search(pattern, str(value))
     return match.group(0) if match else value
 
+@AdapterTransform.register('split')
+def transform_split(value: str, separator: str = ',') -> List[str]:
+    """Split string into list using separator."""
+    return str(value).split(separator)
+
+@AdapterTransform.register('get_index')
+def transform_get_index(value: Any, index: int) -> Any:
+    """Get value at specified index from sequence."""
+    try:
+        return value[index]
+    except (IndexError, TypeError) as e:
+        raise ValueError(f"Cannot get index {index} from value: {str(e)}")
+
 class FieldAdapter(ABC, Generic[T, U]):
     """Base interface for field validation and transformation adapters."""
     
     def __init__(self, config: Dict[str, Any]):
         """Initialize adapter with configuration."""
-        self.config = config
+        self.config = config or {}
         self.pipeline = TransformationPipeline[T, U]()
         self._setup_pipeline()
         self._validate_config()
-    
+
+    def process(self, value: Any) -> U:
+        """Process a value through validation and transformation.
+        
+        This is the main public interface for adapters. It validates and transforms
+        the input value according to the adapter's rules.
+        
+        Args:
+            value: The value to process
+            
+        Returns:
+            The processed value
+            
+        Raises:
+            ValueError: If validation or transformation fails
+        """
+        if value is None:
+            return None
+            
+        # First validate
+        is_valid, error = self.validate(value)
+        if not is_valid:
+            raise ValueError(error)
+            
+        # Then transform
+        success, result = self.transform(value)
+        if not success:
+            raise ValueError(result)
+            
+        return result
+
     @abstractmethod
     def validate(self, value: Any) -> tuple[bool, Optional[str]]:
         """Validate a value according to field rules.
@@ -398,58 +476,42 @@ class FieldAdapter(ABC, Generic[T, U]):
             Tuple of (is_valid, error_message)
         """
         pass
-    
-    @abstractmethod
+
     def transform(self, value: Any) -> tuple[bool, Union[U, str]]:
         """Transform a value according to field rules.
         
         Returns:
             Tuple of (success, transformed_value_or_error)
         """
-        # Run pipeline transformations first
-        if self.pipeline.transformations:
-            result = self.pipeline.execute(value)
-            if not result.success:
-                return False, result.value
-            value = result.value
-            
-        # Then run adapter-specific transformation
-        return self._transform_value(value)
-    
+        try:
+            # Run pipeline transformations first
+            if self.pipeline.transformations:
+                result = self.pipeline.execute(value)
+                if not result.success:
+                    return False, result.value
+                value = result.value
+                
+            # Then run adapter-specific transformation
+            return self._transform_value(value)
+        except Exception as e:
+            return False, str(e)
+
     @abstractmethod
     def _transform_value(self, value: Any) -> tuple[bool, Union[U, str]]:
         """Transform value using adapter-specific logic."""
         pass
-    
+
     @abstractmethod
     def _validate_config(self) -> None:
         """Validate adapter configuration."""
         pass
         
     def _setup_pipeline(self) -> None:
-        """Set up transformation pipeline from configuration."""
-        if 'transformation' not in self.config:
-            return
-            
-        transform_config = self.config['transformation']
-        if 'operations' not in transform_config:
-            return
-            
-        for operation in transform_config['operations']:
-            if 'type' not in operation:
-                continue
-            transform_type = operation['type']
-            # Remove type from config to avoid passing it to transform function
-            operation_config = {k: v for k, v in operation.items() if k != 'type'}
-            
-            # Get transform function from registry
-            transform_fn = self._get_transform_function(transform_type)
-            if transform_fn:
-                self.pipeline.add_transformation(transform_fn, operation_config)
-    
-    def _get_transform_function(self, transform_type: str) -> Optional[callable]:
-        """Get transformation function from registry."""
-        return AdapterTransform.get(transform_type)
+        """Setup transformation pipeline based on config.
+        
+        This method should be overridden by subclasses that need custom pipeline setup.
+        """
+        pass
 
 class PydanticAdapter(FieldAdapter[T, U]):
     """Base adapter implementation using Pydantic models."""
@@ -478,92 +540,31 @@ class PydanticAdapter(FieldAdapter[T, U]):
             return True, None
         except pydantic.ValidationError as e:
             return False, str(e)
-    
-    def transform(self, value: Any) -> tuple[bool, Union[U, str]]:
-        """Transform a value according to field rules."""
-        # Run pipeline transformations first
-        if self.pipeline.transformations:
-            result = self.pipeline.execute(value)
-            if not result.success:
-                return False, result.value
-            value = result.value
-            
-        # Then run adapter-specific transformation
-        return self._transform_value(value)
-    
-    def _transform_value(self, value: Any) -> tuple[bool, Union[U, str]]:
-        """Transform value using Pydantic model."""
-        try:
-            # Model validation and transformation
-            result = self.model_class(value=value)
-            transformed = result.value
-            
-            # Check for post-transform operations
-            post_transform = self.config.get('transformation', {}).get('post_transform')
-            if post_transform:
-                for operation in post_transform:
-                    if 'type' not in operation:
-                        continue
-                    transform_fn = self._get_transform_function(operation['type'])
-                    if transform_fn:
-                        operation_config = {k: v for k, v in operation.items() if k != 'type'}
-                        transformed = transform_fn(transformed, **operation_config)
-            
-            return True, transformed
-        except Exception as e:
-            return False, str(e)
 
-class MarshmallowAdapter(FieldAdapter[T, U]):
-    """Base adapter implementation using Marshmallow schemas."""
-    
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize Marshmallow adapter with schema class and config."""
-        super().__init__(config)
-        self.schema_class = self._create_schema()
-        self.schema = self.schema_class()
-    
-    @abstractmethod
-    def _create_schema(self) -> type[Schema]:
-        """Create Marshmallow schema for field validation/transformation."""
-        pass
-    
-    def validate(self, value: Any) -> tuple[bool, Optional[str]]:
-        """Validate value using Marshmallow schema."""
-        errors = self.schema.validate({"value": value})
-        if errors:
-            return False, str(errors)
-        return True, None
-    
-    def transform(self, value: Any) -> tuple[bool, Union[U, str]]:
-        """Transform a value according to field rules."""
-        # Run pipeline transformations first
-        if self.pipeline.transformations:
-            result = self.pipeline.execute(value)
-            if not result.success:
-                return False, result.value
-            value = result.value
-            
-        # Then run adapter-specific transformation
-        return self._transform_value(value)
-    
-    def _transform_value(self, value: Any) -> tuple[bool, Union[U, str]]:
-        """Transform value using Marshmallow schema."""
-        try:
-            result = self.schema.load({"value": value})
-            return True, result["value"]
-        except Exception as e:
-            return False, str(e)
-
-# Common field adapters using Pydantic
 class DateFieldAdapter(PydanticAdapter[str, date]):
     """Date field adapter using Pydantic."""
     
+    def __init__(self, config: Dict[str, Any] = None, fiscal_year: bool = False):
+        """Initialize date adapter with optional fiscal year transformation."""
+        if config is None:
+            config = {}
+            
+        self.return_fiscal_year = fiscal_year
+        if fiscal_year:
+            config['transformation'] = {
+                'operations': [
+                    {'type': 'derive_fiscal_year', 'fiscal_year_start_month': 10}
+                ]
+            }
+            
+        super().__init__(config)
+
     def _create_model(self) -> type[pydantic.BaseModel]:
         """Create Pydantic model for date validation/transformation."""
         class DateValueModel(pydantic.BaseModel):
             model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
             value: date = pydantic.Field(default=...)
-
+            
             @pydantic.field_validator('value', mode='before')
             @classmethod
             def parse_date(cls, v: Any) -> date:
@@ -577,79 +578,57 @@ class DateFieldAdapter(PydanticAdapter[str, date]):
                 elif isinstance(v, date):
                     return v
                 raise ValueError(f"Cannot convert {type(v)} to date")
-
+                
         return DateValueModel
 
     def _validate_config(self) -> None:
         """Validate date adapter configuration."""
         if 'format' in self.config and not isinstance(self.config['format'], str):
             raise ValueError("'format' must be a string")
-    
-    def transform(self, value: Any) -> tuple[bool, Union[date, str]]:
-        """Transform a value according to field rules."""
-        try:
-            # First parse the date
-            if isinstance(value, str):
-                try:
-                    # Always parse with yearfirst=False to maintain consistency
-                    parsed_date = parser.parse(value, dayfirst=False).date()
-                except Exception as e:
-                    return False, f"Invalid date format: {str(e)}"
-            elif isinstance(value, datetime):
-                parsed_date = value.date()
-            elif isinstance(value, date):
-                parsed_date = value
-            else:
-                return False, f"Cannot convert {type(value)} to date"
-
-            # Run pipeline transformations if any
-            if self.pipeline.transformations:
-                # Check if we need to apply any date-specific transformations
-                date_transform = next((t for t in self.pipeline.transformations 
-                                    if t['function'].__name__ in ('transform_normalize_date', 'transform_derive_fiscal_year')), None)
-                
-                if date_transform:
-                    # Use ISO format for string-based transformations
-                    date_str = parsed_date.isoformat()
-                    result = self.pipeline.execute(date_str)
-                    
-                    if not result.success:
-                        return False, result.value
-                    
-                    # If it's a fiscal year transformation, return the integer result
-                    if date_transform['function'].__name__ == 'transform_derive_fiscal_year':
-                        return True, result.value
-                    
-                    # Otherwise try to parse the result back to a date
-                    try:
-                        return True, parser.parse(result.value).date() if isinstance(result.value, str) else result.value
-                    except Exception:
-                        return True, result.value
             
-            # If no transformations, validate through model and return
-            return self._transform_value(parsed_date)
-            
-        except Exception as e:
-            return False, str(e)
-    
     def _transform_value(self, value: Any) -> tuple[bool, Union[date, str]]:
         """Transform value using Pydantic model."""
         try:
             result = self.model_class(value=value)
-            return True, result.value
+            transformed = result.value
+            
+            if self.return_fiscal_year:
+                # Derive fiscal year from date
+                if transformed.month >= 10:
+                    return True, transformed.year + 1
+                return True, transformed.year
+                
+            return True, transformed
         except Exception as e:
             return False, str(e)
 
 class DecimalFieldAdapter(PydanticAdapter[Union[str, float], Decimal]):
     """Decimal field adapter using Pydantic."""
     
+    def __init__(self, config: Dict[str, Any] = None, precision: int = 2):
+        """Initialize decimal adapter with optional configuration."""
+        if config is None:
+            config = {}
+        
+        # Store precision as a config value
+        config['precision'] = precision
+        
+        # Set default transformation if not provided
+        config.setdefault('transformation', {
+            'operations': [
+                {'type': 'convert_to_decimal', 'precision': precision}
+            ]
+        })
+        
+        super().__init__(config)
+
     def _create_model(self) -> type[pydantic.BaseModel]:
         """Create Pydantic model for decimal validation/transformation."""
+        precision = self.config.get('precision', 2)
+        
         class DecimalModel(pydantic.BaseModel):
             model_config = pydantic.ConfigDict(arbitrary_types_allowed=True)
             value: Decimal = pydantic.Field(
-                validation_alias='value',
-                decimal_places=self.config.get('precision', 2),
                 ge=self.config.get('min_value'),
                 le=self.config.get('max_value')
             )
@@ -658,15 +637,18 @@ class DecimalFieldAdapter(PydanticAdapter[Union[str, float], Decimal]):
             @classmethod
             def parse_decimal(cls, v):
                 if isinstance(v, str):
-                    # Strip currency symbols and grouping
                     v = v.strip().replace('$', '').replace(',', '')
                 try:
-                    return Decimal(str(v))
+                    decimal_val = Decimal(str(v))
+                    # Always round according to precision
+                    return round(decimal_val, cls.model_config.get('precision', 2))
                 except Exception as e:
                     raise ValueError(f"Invalid decimal format: {str(e)}")
-        
+                    
+        # Set precision in model config for validator access
+        DecimalModel.model_config.update({'precision': precision})        
         return DecimalModel
-    
+
     def _validate_config(self) -> None:
         """Validate decimal adapter configuration."""
         if 'precision' in self.config:
@@ -674,28 +656,16 @@ class DecimalFieldAdapter(PydanticAdapter[Union[str, float], Decimal]):
                 raise ValueError("'precision' must be an integer")
             if self.config['precision'] < 0:
                 raise ValueError("'precision' must be non-negative")
-    
+                
     def _transform_value(self, value: Any) -> tuple[bool, Union[Decimal, str]]:
         """Transform value to a decimal."""
         try:
-            # Model validation and transformation
             result = self.model_class(value=value)
             transformed = result.value
             
-            # Apply any post-transform operations
-            post_transform = self.config.get('transformation', {}).get('post_transform', [])
-            for operation in post_transform:
-                if 'type' not in operation:
-                    continue
-                transform_fn = self._get_transform_function(operation['type'])
-                if transform_fn:
-                    operation_config = {k: v for k, v in operation.items() if k != 'type'}
-                    transformed = transform_fn(transformed, **operation_config)
-            
-            # Handle formatting transformation in chain
-            for transform in self.pipeline.transformations:
-                if transform['function'].__name__ == 'transform_format_number':
-                    transformed = transform['function'](transformed, **transform['config'])
+            # Ensure result is rounded according to precision
+            precision = self.config.get('precision', 2)
+            transformed = round(transformed, precision)
             
             return True, transformed
         except Exception as e:
@@ -717,21 +687,96 @@ class EnumFieldAdapter(PydanticAdapter[str, str]):
             def validate_enum(cls, v):
                 check_value = v if case_sensitive else v.upper()
                 valid_values = values if case_sensitive else {val.upper() for val in values}
+                
                 if check_value not in valid_values:
                     raise ValueError(f"Value must be one of: {', '.join(values)}")
                 return v
-        
+                
         return EnumModel
     
     def _validate_config(self) -> None:
         """Validate enum adapter configuration."""
         if 'values' not in self.config or not isinstance(self.config['values'], (list, set)):
             raise ValueError("'values' must be a list or set of valid enum values")
-        self.config['values'] = set(self.config['values'])
+            
+    def _transform_value(self, value: Any) -> tuple[bool, Union[str, str]]:
+        """Transform value according to enum rules."""
+        try:
+            result = self.model_class(value=value)
+            case_sensitive = self.config.get('case_sensitive', True)
+            
+            # Apply case transformation if configured
+            transformed = result.value
+            if not case_sensitive:
+                transformed = transformed.upper()
+            
+            # Apply any additional transformations from config
+            transforms = self.config.get('transformation', {}).get('operations', [])
+            for transform in transforms:
+                if 'type' not in transform:
+                    continue
+                if transform_fn := AdapterTransform.get(transform['type']):
+                    transform_args = {k: v for k, v in transform.items() if k != 'type'}
+                    transformed = transform_fn(transformed, **transform_args)
+            
+            return True, transformed
+        except Exception as e:
+            return False, str(e)
+
+class MappedEnumFieldAdapter(PydanticAdapter[str, str]):
+    """Adapter for enums with value mapping."""
     
-    def transform(self, value: Any) -> tuple[bool, Union[str, str]]:
-        """Transform value to a normalized enum value."""
-        return super().transform(value)
+    def _create_model(self) -> type[pydantic.BaseModel]:
+        """Create Pydantic model for mapped enum validation."""
+        mapping = self.config.get('mapping', {})
+        case_sensitive = self.config.get('case_sensitive', True)
+        default = self.config.get('default')
+        
+        class MappedEnumModel(pydantic.BaseModel):
+            value: str
+            
+            @pydantic.field_validator('value')
+            @classmethod
+            def map_value(cls, v):
+                if case_sensitive:
+                    mapped = mapping.get(v, default)
+                else:
+                    upper_v = v.upper()
+                    for k, val in mapping.items():
+                        if str(k).upper() == upper_v:
+                            return val
+                    mapped = default
+                    
+                if mapped is None and default is None:
+                    raise ValueError(f"Invalid value: {v}")
+                    
+                return mapped if mapped is not None else v
+                
+        return MappedEnumModel
+    
+    def _validate_config(self) -> None:
+        """Validate mapped enum adapter configuration."""
+        if 'mapping' not in self.config or not isinstance(self.config['mapping'], dict):
+            raise ValueError("'mapping' must be a dictionary")
+            
+    def _transform_value(self, value: Any) -> tuple[bool, Union[str, str]]:
+        """Transform value using mapped enum rules."""
+        try:
+            result = self.model_class(value=value)
+            transformed = result.value
+            
+            # Apply any additional transformations from config
+            transforms = self.config.get('transformation', {}).get('operations', [])
+            for transform in transforms:
+                if 'type' not in transform:
+                    continue
+                if transform_fn := AdapterTransform.get(transform['type']):
+                    transform_args = {k: v for k, v in transform.items() if k != 'type'}
+                    transformed = transform_fn(transformed, **transform_args)
+            
+            return True, transformed
+        except Exception as e:
+            return False, str(e)
 
 class CompositeFieldAdapter(PydanticAdapter[Dict[str, Any], Dict[str, Any]]):
     """Adapter for fields that produce multiple output values."""
@@ -765,56 +810,77 @@ class CompositeFieldAdapter(PydanticAdapter[Dict[str, Any], Dict[str, Any]]):
                             raise ValueError(f"Invalid value for {comp}: {str(e)}")
                 
                 return v
-        
+                
         return CompositeModel
     
     def _validate_config(self) -> None:
         """Validate composite adapter configuration."""
         if 'components' not in self.config or not isinstance(self.config['components'], list):
             raise ValueError("'components' must be a list of required component names")
-    
-    def transform(self, value: Any) -> tuple[bool, Union[Dict[str, Any], str]]:
-        """Transform value to a component dictionary."""
-        return super().transform(value)
-
-class MappedEnumAdapter(PydanticAdapter[str, str]):
-    """Adapter for enums with value mapping."""
-    
-    def _create_model(self) -> type[pydantic.BaseModel]:
-        """Create Pydantic model for mapped enum validation."""
-        mapping = self.config.get('mapping', {})
-        case_sensitive = self.config.get('case_sensitive', True)
-        default = self.config.get('default')
-        
-        class MappedEnumModel(pydantic.BaseModel):
-            value: str
             
-            @pydantic.field_validator('value')
-            @classmethod
-            def map_value(cls, v):
-                if case_sensitive:
-                    mapped = mapping.get(v, default)
-                else:
-                    upper_v = v.upper()
-                    for k, val in mapping.items():
-                        if str(k).upper() == upper_v:
-                            return val
-                    mapped = default
+    def _transform_value(self, value: Any) -> tuple[bool, Union[Dict[str, Any], str]]:
+        """Transform composite value with component-specific transforms."""
+        try:
+            result = self.model_class(value=value)
+            transformed = result.value
+            
+            # Apply component-specific transformations
+            transforms = self.config.get('transforms', {})
+            for component, transform_list in transforms.items():
+                if component not in transformed:
+                    continue
+                    
+                component_value = transformed[component]
+                for transform in transform_list:
+                    if 'type' not in transform:
+                        continue
+                    if transform_fn := AdapterTransform.get(transform['type']):
+                        transform_args = {k: v for k, v in transform.items() if k != 'type'}
+                        component_value = transform_fn(component_value, **transform_args)
+                transformed[component] = component_value
                 
-                if mapped is None and default is None:
-                    raise ValueError(f"Invalid value: {v}")
-                return mapped if mapped is not None else v
-        
-        return MappedEnumModel
+            # Apply any global transformations
+            global_transforms = self.config.get('transformation', {}).get('operations', [])
+            for transform in global_transforms:
+                if 'type' not in transform:
+                    continue
+                if transform_fn := AdapterTransform.get(transform['type']):
+                    transform_args = {k: v for k, v in transform.items() if k != 'type'}
+                    transformed = transform_fn(transformed, **transform_args)
+            
+            return True, transformed
+        except Exception as e:
+            return False, str(e)
+
+class MarshmallowAdapter(FieldAdapter[T, U]):
+    """Base adapter implementation using Marshmallow schemas."""
     
-    def _validate_config(self) -> None:
-        """Validate mapped enum adapter configuration."""
-        if 'mapping' not in self.config or not isinstance(self.config['mapping'], dict):
-            raise ValueError("'mapping' must be a dictionary")
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize Marshmallow adapter with schema class and config."""
+        super().__init__(config)
+        self.schema_class = self._create_schema()
+        self.schema = self.schema_class()
     
-    def transform(self, value: Any) -> tuple[bool, Union[str, str]]:
-        """Transform value using enum mapping."""
-        return super().transform(value)
+    @abstractmethod
+    def _create_schema(self) -> type[Schema]:
+        """Create Marshmallow schema for field validation/transformation."""
+        pass
+    
+    def validate(self, value: Any) -> tuple[bool, Optional[str]]:
+        """Validate value using Marshmallow schema."""
+        try:
+            errors = self.schema.validate({'value': value})
+            return not errors, str(errors) if errors else None
+        except Exception as e:
+            return False, str(e)
+            
+    def _transform_value(self, value: Any) -> tuple[bool, Union[U, str]]:
+        """Transform value using Marshmallow schema."""
+        try:
+            result = self.schema.load({'value': value})
+            return True, result['value']
+        except Exception as e:
+            return False, str(e)
 
 class SchemaAdapterFactory:
     """Factory for creating field adapters."""
@@ -837,15 +903,65 @@ class SchemaAdapterFactory:
             except Exception as e:
                 raise ValueError(f"Failed to create adapter for type '{type_name}': {str(e)}")
         return None
-
+        
     @classmethod
-    def get_available_types(cls) -> list[str]:
+    def get_available_types(cls) -> List[str]:
         """Get list of available adapter types."""
         return list(cls._adapters.keys())
+
+    @classmethod
+    def chain(cls, adapters: List[FieldAdapter]) -> FieldAdapter:
+        """Chain multiple adapters together into a composite adapter.
+        
+        Args:
+            adapters: List of adapters to chain together
+            
+        Returns:
+            A composite adapter that applies the adapters in sequence
+        """
+        if not adapters:
+            raise ValueError("Cannot chain empty adapter list")
+            
+        # Create a composite adapter that chains the transformations
+        class ChainedAdapter(FieldAdapter):
+            def __init__(self, adapter_chain: List[FieldAdapter]):
+                self.adapter_chain = adapter_chain
+                super().__init__({})
+                
+            def validate(self, value: Any) -> tuple[bool, Optional[str]]:
+                """Validate through all adapters in chain."""
+                current = value
+                for adapter in self.adapter_chain:
+                    is_valid, error = adapter.validate(current)
+                    if not is_valid:
+                        return False, error
+                    # Transform for next validation if not last adapter
+                    if adapter != self.adapter_chain[-1]:
+                        success, result = adapter.transform(current)
+                        if not success:
+                            return False, result
+                        current = result
+                return True, None
+                
+            def _transform_value(self, value: Any) -> tuple[bool, Any]:
+                """Transform through all adapters in chain."""
+                current = value
+                for adapter in self.adapter_chain:
+                    success, result = adapter.transform(current)
+                    if not success:
+                        return False, result
+                    current = result
+                return True, current
+                
+            def _validate_config(self) -> None:
+                """No config to validate for chained adapter."""
+                pass
+                
+        return ChainedAdapter(adapters)
 
 # Register core adapter types
 SchemaAdapterFactory.register('date', DateFieldAdapter)
 SchemaAdapterFactory.register('decimal', DecimalFieldAdapter)
 SchemaAdapterFactory.register('enum', EnumFieldAdapter)
-SchemaAdapterFactory.register('mapped_enum', MappedEnumAdapter)
+SchemaAdapterFactory.register('mapped_enum', MappedEnumFieldAdapter)
 SchemaAdapterFactory.register('composite', CompositeFieldAdapter)

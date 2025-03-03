@@ -1,0 +1,119 @@
+entities:
+  contract:
+    enabled: true
+    entity_processing:
+      enabled: true
+      processing_order: 1
+    field_mappings:
+      direct:
+        amount:
+          field: contract_amount
+          transformation:
+            pre:
+            - characters: $,
+              operation: strip
+            type: money
+        description:
+          field: contract_description
+        id:
+          field: contract_id
+      object:
+        period:
+          fields:
+            end_date:
+              field: period_of_performance_end
+              transformation:
+                type: date
+            start_date:
+              field: period_of_performance_start
+              transformation:
+                type: date
+      reference:
+        recipient:
+          entity_type: recipient
+          fields:
+            id:
+              field: recipient_id
+            name:
+              field: recipient_name
+    key_fields:
+    - contract_id
+  recipient:
+    enabled: true
+    entity_processing:
+      enabled: true
+      processing_order: 2
+    field_mappings:
+      direct:
+        id:
+          field: recipient_id
+        name:
+          field: recipient_name
+      object:
+        address:
+          fields:
+            city:
+              field: recipient_city
+            state:
+              field: recipient_state
+            street:
+              field: recipient_address
+            zip:
+              field: recipient_zip
+              transformation:
+                type: zip
+    key_fields:
+    - recipient_id
+entity_processing:
+  enabled: true
+  processing_order: 1
+field_mappings:
+  direct:
+    contract_id:
+      field: contract_id
+    recipient_id:
+      field: recipient_id
+global:
+  datetime_format: '%Y-%m-%d %H:%M:%S'
+  encoding: utf-8
+  formats:
+    csv:
+      delimiter: ','
+      encoding: utf-8-sig
+      quotechar: '"'
+    json:
+      ensure_ascii: false
+      indent: 2
+  processing:
+    max_chunk_size_mb: 10
+    records_per_chunk: 100
+key_fields:
+- contract_id
+- recipient_id
+system:
+  error_handling:
+    log_errors: true
+    stop_on_error: false
+  io:
+    input:
+      batch_size: 100
+      field_pattern_exceptions: []
+      file: D:\VS Code Projects\USASpending\tests\data\test_transactions.csv
+      skip_invalid_rows: false
+      validate_input: true
+    output:
+      directory: D:\VS Code Projects\USASpending\tests\data\output
+      ensure_ascii: false
+      entities_subfolder: entities
+      indent: 2
+      transaction_base_name: transactions
+      transaction_file: contracts.json
+  processing:
+    create_index: true
+    entity_save_frequency: 100
+    incremental_save: true
+    log_frequency: 50
+    max_chunk_size_mb: 10
+    max_workers: 4
+    queue_size: 1000
+    records_per_chunk: 100

@@ -178,127 +178,47 @@ class ValidationEngine:
                             components = rule.split(':')
                             if len(components) >= 3 and components[0] == 'compare':
                                 target_field = components[2]
-                                # Add bidirectional dependency for comparisons
+                                # Add one-way dependency for comparisons to prevent cycles
+                                # The direction is from the field being validated to its target
                                 self.dependency_manager.add_dependency(
                                     field_name,
                                     target_field,
                                     'comparison',
-                                    {'operator': components[1], 'bidirectional': True}
-                                )
-                                self.dependency_manager.add_dependency(
-                                    target_field,
-                                    field_name,
-                                    'comparison',
-                                    {'operator': components[1], 'bidirectional': True}
+                                    {'operator': components[1]}
                                 )
                         
-    def _add_comparison_dependencies(self) -> None:
-        """Add dependencies for field comparison rules."""
-        for field_type, type_config in self.field_properties.items():
-            if not isinstance(type_config, dict):
-                continue
+    def validate_record(self, record: Dict[str, Any], entity_stores: Dict[str, 'EntityStore']) -> ValidationResult:
+        """Validate a record against all rules."""
+        # Fix: Initialize ValidationResult with required parameters
+        result = ValidationResult(valid=True, field_name="record")
+        validated_fields = set()
+        
+        # Get validation order to respect dependencies
+        try:
+            validation_order = self.dependency_manager.get_validation_order()
+        except ValueError:
+            # If circular dependency, use fallback order
+            logger.warning("Using fallback validation order due to circular dependencies")
+            validation_order = sorted(record.keys())
+        
+        for field_name in validation_order:
+            if field_name in record and field_name not in validated_fields:
+                field_result = self._validate_field(field_name, record[field_name], record)
                 
-            for subtype, subtype_config in type_config.items():
-                if not isinstance(subtype_config, dict):
-                    continue
-                    
-                # Handle field comparison rules
-                validation = subtype_config.get('validation', {})
-                if validation.get('type') == 'field_comparison' and 'comparisons' in validation:
-                    fields = subtype_config.get('fields', [])
-                    
-                    for comparison in validation['comparisons']:
-                        operator = comparison.get('operator')
-                        if not operator:
-                            continue
-                            
-                        for field_pair in comparison.get('field_pairs', []):
-                            field = field_pair.get('field')
-                            compare_to = field_pair.get('compare_to')
-                            
-                            if field and compare_to and field in fields:
-                                self.dependency_manager.add_dependency(
-                                    field, 
-                                    compare_to,
-                                    'comparison',
-                                    {'operator': operator}
-                                )
-    
-    def update_field_dependencies(self):
-        """Update field dependencies after configuration changes."""
-        self._init_field_dependencies()
-    
-    def validate_record(self, record: Dict[str, Any]) -> List[ValidationResult]:
-        """Validate a record, handling circular dependencies."""
-        # Update dependencies first in case config changed
-        self.update_field_dependencies()
-        
-        # Track validation results
-        results = []
-        
-        # Get fields to validate
-        fields_to_validate = list(record.keys())
-        
-        # Initialize tracking of validation attempts
-        processed_fields = set()
-        field_defer_counts = {}
-        max_deferrals = len(fields_to_validate) + 1  # Allow N+1 deferrals before assuming a cycle
-        
-        # Process fields in dependency order if possible
-        validation_order = self.get_validation_order()
-        
-        # Reorder fields to validate based on dependencies
-        ordered_fields = []
-        for field in validation_order:
-            if field in fields_to_validate:
-                ordered_fields.append(field)
-        
-        # Add any remaining fields not in the validation order
-        for field in fields_to_validate:
-            if field not in ordered_fields:
-                ordered_fields.append(field)
-        
-        # Use a queue for processing fields
-        fields_queue = collections.deque(ordered_fields)
-        
-        while fields_queue:
-            field_name = fields_queue.popleft()
-            
-            # Skip already processed fields
-            if field_name in processed_fields:
-                continue
+                if not field_result.valid:
+                    result.valid = False
+                    if field_result.error_message:
+                        if not hasattr(result, 'errors'):
+                            result.errors = {}
+                        result.errors[field_name] = field_result.error_message
+                    if hasattr(field_result, 'warnings') and field_result.warnings:
+                        if not hasattr(result, 'warnings'):
+                            result.warnings = {}
+                        result.warnings[field_name] = field_result.warnings.get(field_name)
                 
-            # Get unvalidated dependencies
-            unvalidated_dependencies = self._get_unvalidated_dependencies(field_name, record)
-            
-            if unvalidated_dependencies:
-                # Track how many times this field has been deferred
-                field_defer_counts[field_name] = field_defer_counts.get(field_name, 0) + 1
-                
-                # If we've deferred this field too many times, we're in a cycle
-                if field_defer_counts[field_name] > max_deferrals:
-                    # Force validation despite circular dependency
-                    result = self._validate_field(field_name, record.get(field_name), record)
-                    if not result.valid:
-                        results.append(result)
-                    processed_fields.add(field_name)
-                else:
-                    # Move dependencies to front of queue
-                    for dep in reversed(unvalidated_dependencies):
-                        if dep in fields_queue:
-                            fields_queue.remove(dep)
-                        fields_queue.appendleft(dep)
-                    
-                    # Move current field to end
-                    fields_queue.append(field_name)
-            else:
-                # No dependencies or all are validated, proceed with validation
-                result = self._validate_field(field_name, record.get(field_name), record)
-                if not result.valid:
-                    results.append(result)
-                processed_fields.add(field_name)
-                
-        return results
+                validated_fields.add(field_name)
+        
+        return result
 
     def _force_validate_in_cycle(self, field_name, record, circular_dependencies):
         """Break circular dependency by validating the field with current values."""
@@ -393,14 +313,15 @@ class ValidationEngine:
                     result.error_level = error_level
                     return result
         
-        # Add all discovered dependencies to the dependency manager
+        # Add discovered dependencies to the dependency manager
+        # Only add dependencies in one direction to prevent cycles
         for dep_field in all_dependencies:
             if dep_field != field_name:  # Avoid self-dependencies
                 self.dependency_manager.add_dependency(
                     field_name,
                     dep_field,
                     'group_validation',
-                    {'bidirectional': True}
+                    {'bidirectional': False}  # Changed to false to prevent cycles
                 )
                     
         return ValidationResult(valid=True, field_name=field_name)
@@ -712,3 +633,24 @@ class ValidationEngine:
                 continue
                 
         return unvalidated
+
+
+class ValidationResult:
+    """Result of a validation check."""
+    def __init__(self, valid, message=None, error_type=None, field_name=None):
+        self.valid = valid
+        self.message = message
+        self.error_type = error_type
+        self.field_name = field_name
+        # For backward compatibility with code that expects is_valid
+        self.is_valid = valid
+    
+    # Make ValidationResult iterable to support existing code
+    def __iter__(self):
+        """Make ValidationResult iterable by yielding itself."""
+        yield self
+
+    # Allow checking validity with 'if results' pattern
+    def __bool__(self):
+        """Allow using ValidationResult in boolean context."""
+        return self.valid

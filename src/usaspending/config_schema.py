@@ -199,3 +199,26 @@ ENTITY_CONFIG_SCHEMA = {
     },
     "required": ["key_fields", "field_mappings", "entity_processing"]
 }
+
+# Add Root Configuration Schema
+ROOT_CONFIG_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "system": {"type": "object"},
+        "validation_groups": {"type": "object"},
+        "data_dictionary": {"type": "object"},
+        "field_properties": {"type": "object"},
+        "relationships": {
+            "type": "array",
+            "items": {"type": "object"}
+        },
+        "entities": {
+            "type": "object",
+            "patternProperties": {
+                "^[a-zA-Z_][a-zA-Z0-9_]*$": ENTITY_CONFIG_SCHEMA
+            }
+        },
+        "documentation": {"type": "object"}
+    },
+    "required": ["entities"]
+}

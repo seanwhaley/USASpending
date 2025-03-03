@@ -7,6 +7,19 @@ from .schema_adapters import PydanticAdapter, SchemaAdapterFactory, AdapterTrans
 class EnumFieldAdapter(PydanticAdapter[str, str]):
     """Base adapter for enumerated fields."""
     
+    def __init__(self, config: Dict[str, Any] = None, enum_class = None):
+        """Initialize enum adapter with optional configuration."""
+        if config is None:
+            config = {}
+            
+        if enum_class:
+            config['values'] = [e.value for e in enum_class]
+            
+        if 'values' not in config:
+            config['values'] = set()
+            
+        super().__init__(config)
+
     def _create_model(self) -> type[BaseModel]:
         """Create Pydantic model for enum validation/transformation."""
         values = self.config.get('values', set())
@@ -56,12 +69,26 @@ class EnumFieldAdapter(PydanticAdapter[str, str]):
 class MappedEnumFieldAdapter(EnumFieldAdapter):
     """Adapter for enums with value mappings and descriptions."""
     
+    def __init__(self, config: Dict[str, Any] = None, enum_class = None, mapping: Dict[str, str] = None):
+        """Initialize mapped enum adapter with optional configuration."""
+        if config is None:
+            config = {}
+            
+        if enum_class:
+            config['values'] = [e.value for e in enum_class]
+            
+        if mapping:
+            config['mapping'] = mapping
+            
+        super().__init__(config)
+
     def _create_model(self) -> type[BaseModel]:
         """Create Pydantic model for mapped enum validation."""
         values = self.config.get('values', {})
         descriptions = self.config.get('descriptions', {})
         case_sensitive = self.config.get('case_sensitive', True)
         allow_unknown = self.config.get('allow_unknown', False)
+        mapping = self.config.get('mapping', {})
         
         if not isinstance(values, dict):
             # Convert list/set to dict with identity mapping
@@ -81,7 +108,7 @@ class MappedEnumFieldAdapter(EnumFieldAdapter):
                 if check_value not in valid_set and not allow_unknown:
                     raise ValueError(f"Invalid value. Must be one of: {value_desc}")
                 return v
-            
+                
             @field_validator('value', mode='before')
             @classmethod
             def clean_mapped_enum(cls, v: Any) -> str:
@@ -90,10 +117,20 @@ class MappedEnumFieldAdapter(EnumFieldAdapter):
                 v = v.strip()
                 if not case_sensitive:
                     v = v.upper()
-                # Handle common variations if provided
-                variations = {var.upper(): code for code, vars in values.items() for var in vars} if isinstance(values, dict) else {}
-                return variations.get(v.upper(), v) if not case_sensitive else variations.get(v, v)
-        
+                    
+                # Apply mapping if available
+                if v in mapping:
+                    return mapping[v]
+                    
+                # Case-insensitive mapping check
+                if not case_sensitive:
+                    v_upper = v.upper()
+                    for k, mapped in mapping.items():
+                        if str(k).upper() == v_upper:
+                            return mapped
+                            
+                return v
+                
         return MappedEnumModel
 
 # Register enum-specific transformations

@@ -31,13 +31,17 @@ class EntityStore:
 
     def __init__(self, base_path: str, entity_type: str, config: ConfigManager) -> None:
         """Initialize entity store with validation."""
+        logger.debug(f"Initializing EntityStore for {entity_type}")
         self.config_manager = config
         self.entity_type = entity_type
         self.config = self.config_manager.config
         self.entity_config = self.config_manager.get_entity_config(entity_type)
         
         if not self.entity_config:
+            logger.error(f"No configuration found for entity type: {entity_type}")
             raise ValueError(f"No configuration found for entity type: {entity_type}")
+        
+        logger.debug(f"Entity config for {entity_type}: {json.dumps(self.entity_config, indent=2)}")
             
         # Core components initialization
         self.cache = get_entity_cache()
@@ -59,6 +63,7 @@ class EntityStore:
         # Load validation rules
         self.validation_rules = self._load_validation_rules()
         self.validator = ValidationEngine(self.config_manager)
+        logger.info(f"EntityStore initialized for {entity_type} with {len(self.validation_rules)} validation rules")
 
     def _init_relationship_management(self) -> None:
         """Initialize relationship management capabilities."""
@@ -273,9 +278,11 @@ class EntityStore:
     def add_entity(self, data: Optional[Dict[str, Any]]) -> Optional[Union[str, Dict[str, str], CompositeKey]]:
         """Add an entity to the store."""
         if not data:
+            logger.debug(f"Skipping empty entity data for {self.entity_type}")
             self.cache.add_skipped("invalid_data")
             return None
 
+        logger.debug(f"Generating key for {self.entity_type} entity")
         entity_key = self._generate_entity_key(data)
         if not entity_key:
             error_template = self.config.get('validation_messages', {}).get('entity', {}).get(
@@ -289,12 +296,18 @@ class EntityStore:
         cache_key = self._make_hashable_key(entity_key)
         is_update = cache_key in self.cache.cache
         
+        if is_update:
+            logger.debug(f"Updating existing {self.entity_type} entity with key: {cache_key}")
+        else:
+            logger.debug(f"Adding new {self.entity_type} entity with key: {cache_key}")
+        
         # Store the original key format for external references
         original_key = entity_key if isinstance(entity_key, dict) else cache_key
         self.cache.add_entity(cache_key, data, is_update)
         
         # Process relationships if configured
         if data and cache_key:
+            logger.debug(f"Processing relationships for {self.entity_type} entity: {cache_key}")
             self.process_relationships(data, {"key": cache_key})
                 
         return original_key
@@ -327,6 +340,7 @@ class EntityStore:
     def process_relationships(self, entity_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> None:
         """Process entity relationships based on configuration."""
         if not entity_data or not context:
+            logger.debug(f"Skipping relationship processing for {self.entity_type} - missing data or context")
             return
             
         entity_key = context.get('key')
@@ -334,12 +348,18 @@ class EntityStore:
             logger.warning(f"Invalid entity key in context for {self.entity_type}")
             return
 
+        logger.debug(f"Processing relationships for {self.entity_type} with key: {entity_key}")
+
         # Ensure key is hashable
         if isinstance(entity_key, dict):
             entity_key = self._make_hashable_key(entity_key)
 
         self._process_flat_relationships(entity_data, entity_key)
         self._process_hierarchical_relationships(entity_data, entity_key)
+        
+        # Log relationship stats
+        rel_count = sum(len(rels) for rels in self.relationships[entity_key].values())
+        logger.debug(f"Processed {rel_count} relationships for {self.entity_type} entity: {entity_key}")
 
     def _process_flat_relationships(self, entity_data: Dict[str, Any], entity_key: Union[str, CompositeKey]) -> None:
         """Process flat relationships."""
@@ -484,11 +504,20 @@ class EntityStore:
 
     def save(self) -> None:
         """Save entities and relationships."""
-        self.serializer.save(
-            self.cache.cache,
-            dict(self.relationships),  # Convert defaultdict to regular dict
-            self.cache.get_stats()
-        )
+        logger.info(f"Saving {self.entity_type} store")
+        logger.debug(f"Entity count: {len(self.cache.cache)}")
+        logger.debug(f"Relationship count: {sum(len(v) for v in self.relationships.values())}")
+        
+        try:
+            self.serializer.save(
+                self.cache.cache,
+                dict(self.relationships),  # Convert defaultdict to regular dict
+                self.cache.get_stats()
+            )
+            logger.info(f"Successfully saved {self.entity_type} store")
+        except Exception as e:
+            logger.error(f"Error saving {self.entity_type} store: {str(e)}", exc_info=True)
+            raise
 
 class FieldDependencyManager:
     def __init__(self):

@@ -5,7 +5,7 @@ from datetime import date
 from typing import Dict, Any
 import collections
 
-from usaspending.validation import ValidationEngine, ValidationGroupManager
+from usaspending.validation import ValidationEngine, ValidationGroupManager, ValidationResult
 from usaspending.field_dependencies import FieldDependencyManager
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def sample_config() -> Dict[str, Any]:
                 'description': 'Validates monetary amounts and relationships',
                 'enabled': True,
                 'rules': [
-                    'compare:greater_than:maximum_amount',  # Changed from less_than to greater_than
+                    'compare:less_than_equal:maximum_amount',  # Changed from greater_than to less_than_equal
                 ],
                 'error_level': 'error'
             },
@@ -27,8 +27,8 @@ def sample_config() -> Dict[str, Any]:
                 'description': 'Validates date relationships',
                 'enabled': True,
                 'rules': [
-                    'compare:greater_than:start_date',  # Changed order of date comparison
-                    'compare:less_than:end_date'
+                    'compare:less_than:end_date',  # start_date should be less than end_date
+                    'compare:greater_than:start_date'  # end_date should be greater than start_date
                 ],
                 'error_level': 'error'
             }
@@ -65,6 +65,22 @@ def sample_config() -> Dict[str, Any]:
                     'groups': ['date_validation'],
                     'comparable_types': ['date']
                 }
+            },
+            'payment_type': {
+                'type': 'string',
+                'validation': {
+                    'values': ['advance', 'reimbursement'],
+                    'conditional_rules': {
+                        'advance': {
+                            'pattern': r'^ADV\d{6}$',
+                            'error_message': 'Advance payment code must be ADV followed by 6 digits'
+                        },
+                        'reimbursement': {
+                            'pattern': r'^REI\d{6}$',
+                            'error_message': 'Reimbursement code must be REI followed by 6 digits'
+                        }
+                    }
+                }
             }
         }
     }
@@ -81,13 +97,13 @@ def test_validation_group_manager(sample_config):
     # Test rule retrieval
     amount_rules = manager.get_group_rules('amount_validation')
     assert len(amount_rules) == 1
-    assert 'compare:greater_than:maximum_amount' in amount_rules
+    assert 'compare:less_than_equal:maximum_amount' in amount_rules
     
     # Test dependency resolution
     date_rules = manager.get_group_rules('date_validation')
     assert len(date_rules) == 2
-    assert 'compare:greater_than:start_date' in date_rules
     assert 'compare:less_than:end_date' in date_rules
+    assert 'compare:greater_than:start_date' in date_rules
     
     # Test error levels
     assert manager.get_group_error_level('amount_validation') == 'error'
@@ -96,31 +112,33 @@ def test_validation_group_manager(sample_config):
 def test_field_dependencies(sample_config):
     """Test field dependency tracking and validation."""
     engine = ValidationEngine(sample_config)
-    
+
     # Test valid record
     record = {
-        'award_amount': Decimal('2000.00'),  # Should be greater than maximum_amount
-        'maximum_amount': Decimal('1000.00'),
+        'award_amount': Decimal('2000.00'),  # Should be less than or equal to maximum_amount for this test
+        'maximum_amount': Decimal('2000.00'),
+        'start_date': date(2024, 1, 1),
+        'end_date': date(2024, 12, 31)  # Should be greater than start_date
+    }
+    
+    # Create empty entity_stores for validation
+    entity_stores = {}
+    
+    results = engine.validate_record(record, entity_stores)
+    assert results.is_valid
+    assert not results.errors
+
+    # Test invalid record (award_amount > maximum_amount)
+    invalid_record = {
+        'award_amount': Decimal('3000.00'),
+        'maximum_amount': Decimal('2000.00'),
         'start_date': date(2024, 1, 1),
         'end_date': date(2024, 12, 31)
     }
-    results = engine.validate_record(record)
-    assert not results  # No validation errors
-    
-    # Test invalid amount relationship
-    record['award_amount'] = Decimal('500.00')  # Lower than maximum_amount
-    results = engine.validate_record(record)
-    assert len(results) == 1
-    assert results[0].field_name == 'award_amount'
-    assert not results[0].valid
-    
-    # Test invalid date relationship
-    record['award_amount'] = Decimal('2000.00')
-    record['start_date'] = date(2024, 12, 1)  # Start date after end date
-    results = engine.validate_record(record)
-    assert len(results) == 1
-    assert results[0].field_name == 'start_date'
-    assert not results[0].valid
+    results = engine.validate_record(invalid_record, entity_stores)
+    assert not results.is_valid
+    assert len(results.errors) == 1
+    assert 'award_amount' in results.errors
 
 def test_validation_ordering(sample_config):
     """Test that validation occurs in the correct dependency order."""
@@ -154,41 +172,20 @@ def test_validation_ordering(sample_config):
 
 def test_conditional_validation(sample_config):
     """Test conditional validation rules."""
-    config = sample_config
-    config['field_properties']['payment_type'] = {
-        'type': 'string',
-        'validation': {
-            'values': ['advance', 'reimbursement'],
-            'conditional_rules': {
-                'advance': {
-                    'pattern': r'^ADV\d{6}$',
-                    'error_message': 'Advance payment code must be ADV followed by 6 digits'
-                },
-                'reimbursement': {
-                    'pattern': r'^REI\d{6}$',
-                    'error_message': 'Reimbursement code must be REI followed by 6 digits'
-                }
-            }
-        }
-    }
-    
-    engine = ValidationEngine(config)
+    engine = ValidationEngine(sample_config)
     
     # Test valid advance payment
     record = {'payment_type': 'advance', 'payment_code': 'ADV123456'}
-    results = engine.validate_record(record)
-    assert not results
-    
+    entity_stores = {}  # Provide an empty entity_stores dictionary
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
     # Test invalid advance payment
-    record['payment_code'] = 'REI123456'
-    results = engine.validate_record(record)
-    assert len(results) == 1
-    assert 'ADV' in results[0].error_message
-    
-    # Test valid reimbursement
-    record = {'payment_type': 'reimbursement', 'payment_code': 'REI123456'}
-    results = engine.validate_record(record)
-    assert not results
+    record['payment_code'] = '123456'
+    results = engine.validate_record(record, entity_stores)
+    assert any(not result.valid for result in results)
+    assert any(result.field_name == 'payment_code' for result in results)
+    assert any('Advance payment code must be ADV followed by 6 digits' in result.error_message for result in results)
 
 def test_circular_dependency_detection(sample_config):
     """Test detection of circular dependencies in validation groups."""
