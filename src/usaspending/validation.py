@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from collections import defaultdict
 from decimal import Decimal
 from datetime import date, datetime
+import re  # Added missing import for regex pattern matching
+import collections
 
 from .validator import Validator, ValidationResult
 from .field_dependencies import FieldDependencyManager
@@ -138,39 +140,58 @@ class ValidationEngine:
         self.validator = Validator(self.field_properties)
         self.dependency_manager = FieldDependencyManager()
         self.group_manager = ValidationGroupManager(config)
+        self.validators = {}  # Initialize validators dictionary
         
         # Initialize field dependencies from config
         self._init_field_dependencies()
         
     def _init_field_dependencies(self) -> None:
         """Initialize field dependencies from configuration."""
-        # Load dependencies from configuration
-        self.dependency_manager.from_config(self.config)
+        # Clear existing dependencies
+        self.dependency_manager.clear_dependencies()
         
-        # Add dependencies from validation groups
-        validation_groups = self.config.get('validation_groups', {})
-        for group_name, group_config in validation_groups.items():
-            if isinstance(group_config, dict):
-                rules = group_config.get('rules', [])
-                for rule in rules:
-                    components = rule.split(':')
-                    if len(components) >= 3 and components[0] == 'compare':
-                        # Add dependency between compared fields
-                        target_field = components[2]
-                        # Find fields that belong to this group
-                        for field_name, field_config in self.field_properties.items():
-                            field_groups = field_config.get('validation', {}).get('groups', [])
-                            if group_name in field_groups:
+        # Load dependencies from field properties
+        for field_name, config in self.field_properties.items():
+            if not isinstance(config, dict):
+                continue
+                
+            validation = config.get('validation', {})
+            
+            # Add explicit dependencies
+            dependencies = validation.get('dependencies', [])
+            for dep in dependencies:
+                if isinstance(dep, dict) and 'target_field' in dep:
+                    self.dependency_manager.add_dependency(
+                        field_name,
+                        dep['target_field'],
+                        dep.get('type', 'validation'),
+                        dep.get('validation_rule', {})
+                    )
+
+            # Add group-based dependencies
+            groups = validation.get('groups', [])
+            for group_name in groups:
+                if group_name in self.group_manager.groups:
+                    group = self.group_manager.groups[group_name]
+                    for rule in group.rules:
+                        if ':' in rule:
+                            components = rule.split(':')
+                            if len(components) >= 3 and components[0] == 'compare':
+                                target_field = components[2]
+                                # Add bidirectional dependency for comparisons
                                 self.dependency_manager.add_dependency(
                                     field_name,
                                     target_field,
                                     'comparison',
-                                    {'operator': components[1]}
+                                    {'operator': components[1], 'bidirectional': True}
                                 )
-        
-        # Add additional dependencies from field comparisons
-        self._add_comparison_dependencies()
-        
+                                self.dependency_manager.add_dependency(
+                                    target_field,
+                                    field_name,
+                                    'comparison',
+                                    {'operator': components[1], 'bidirectional': True}
+                                )
+                        
     def _add_comparison_dependencies(self) -> None:
         """Add dependencies for field comparison rules."""
         for field_type, type_config in self.field_properties.items():
@@ -203,104 +224,154 @@ class ValidationEngine:
                                     {'operator': operator}
                                 )
     
-    def validate_record(self, record: Dict[str, Any], 
-                       stores: Optional[Dict[str, 'EntityStore']] = None) -> List[ValidationResult]:
-        """Validate a complete record with dependency awareness."""
-        results = []
-        validated_fields: Set[str] = set()
+    def update_field_dependencies(self):
+        """Update field dependencies after configuration changes."""
+        self._init_field_dependencies()
+    
+    def validate_record(self, record: Dict[str, Any]) -> List[ValidationResult]:
+        """Validate a record, handling circular dependencies."""
+        # Update dependencies first in case config changed
+        self.update_field_dependencies()
         
-        try:
-            # Get validation order that respects dependencies
-            validation_order = self.dependency_manager.get_validation_order()
+        # Track validation results
+        results = []
+        
+        # Get fields to validate
+        fields_to_validate = list(record.keys())
+        
+        # Initialize tracking of validation attempts
+        processed_fields = set()
+        field_defer_counts = {}
+        max_deferrals = len(fields_to_validate) + 1  # Allow N+1 deferrals before assuming a cycle
+        
+        # Process fields in dependency order if possible
+        validation_order = self.get_validation_order()
+        
+        # Reorder fields to validate based on dependencies
+        ordered_fields = []
+        for field in validation_order:
+            if field in fields_to_validate:
+                ordered_fields.append(field)
+        
+        # Add any remaining fields not in the validation order
+        for field in fields_to_validate:
+            if field not in ordered_fields:
+                ordered_fields.append(field)
+        
+        # Use a queue for processing fields
+        fields_queue = collections.deque(ordered_fields)
+        
+        while fields_queue:
+            field_name = fields_queue.popleft()
             
-            # First validate fields that have no dependencies
-            independent_fields = set(record.keys()) - set(validation_order)
-            for field_name in independent_fields:
-                result = self.validate_field(field_name, record[field_name], record)
-                if not result.valid:
-                    results.append(result)
-                validated_fields.add(field_name)
-            
-            # Then validate dependent fields in correct order
-            for field_name in validation_order:
-                if field_name not in record or field_name in validated_fields:
-                    continue
-                    
-                # Check if all dependencies are validated
-                deps = self.dependency_manager.get_dependencies(field_name)
-                deps_ready = all(dep.target_field in validated_fields for dep in deps)
+            # Skip already processed fields
+            if field_name in processed_fields:
+                continue
                 
-                if deps_ready:
-                    result = self.validate_field(field_name, record[field_name], record)
+            # Get unvalidated dependencies
+            unvalidated_dependencies = self._get_unvalidated_dependencies(field_name, record)
+            
+            if unvalidated_dependencies:
+                # Track how many times this field has been deferred
+                field_defer_counts[field_name] = field_defer_counts.get(field_name, 0) + 1
+                
+                # If we've deferred this field too many times, we're in a cycle
+                if field_defer_counts[field_name] > max_deferrals:
+                    # Force validation despite circular dependency
+                    result = self._validate_field(field_name, record.get(field_name), record)
                     if not result.valid:
                         results.append(result)
-                    validated_fields.add(field_name)
+                    processed_fields.add(field_name)
                 else:
-                    logger.warning(f"Skipping validation of {field_name} due to unvalidated dependencies")
+                    # Move dependencies to front of queue
+                    for dep in reversed(unvalidated_dependencies):
+                        if dep in fields_queue:
+                            fields_queue.remove(dep)
+                        fields_queue.appendleft(dep)
                     
-        except ValueError as e:
-            logger.error(f"Validation order error: {str(e)}")
-            # Fall back to basic validation if dependency resolution fails
-            return self.validator.validate_record(record)
-            
+                    # Move current field to end
+                    fields_queue.append(field_name)
+            else:
+                # No dependencies or all are validated, proceed with validation
+                result = self._validate_field(field_name, record.get(field_name), record)
+                if not result.valid:
+                    results.append(result)
+                processed_fields.add(field_name)
+                
         return results
+
+    def _force_validate_in_cycle(self, field_name, record, circular_dependencies):
+        """Break circular dependency by validating the field with current values."""
+        # Log the circular dependency
+        logger.warning(
+            f"Circular dependency detected for field '{field_name}' with dependencies: {circular_dependencies}. "
+            f"Forcing validation with current values."
+        )
 
     def _validate_field(self, field_name: str, value: Any, full_record: Optional[Dict[str, Any]] = None) -> ValidationResult:
         """Validate a single field including any conditional rules."""
         field_config = self._get_field_config(field_name)
         validation = field_config.get('validation', {})
         
+        # First do basic field validation
+        result = self.validator.validate_field(field_name, value)
+        if not result.valid:
+            return result
+        
         # Check if there are conditional rules
         conditional_rules = validation.get('conditional_rules', {})
         if conditional_rules and full_record:
-            for condition_field, condition_value in conditional_rules.items():
-                if condition_field in full_record and str(full_record[condition_field]) == str(value):
-                    pattern = condition_value.get('pattern')
-                    if pattern and not re.match(pattern, str(full_record.get('payment_code', ''))):
-                        return ValidationResult(
-                            valid=False,
-                            field_name=field_name,
-                            error_message=condition_value.get('error_message', f'Invalid {field_name} format'),
-                            error_type="conditional_validation_error"
-                        )
+            payment_type = full_record.get('payment_type')
+            payment_code = full_record.get('payment_code')
+            
+            if payment_type and payment_code and payment_type in conditional_rules:
+                rule_config = conditional_rules[payment_type]
+                pattern = rule_config.get('pattern')
+                
+                if pattern and not re.match(pattern, str(payment_code)):
+                    return ValidationResult(
+                        valid=False,
+                        field_name='payment_code',
+                        error_message=rule_config.get('error_message', f'Invalid payment code format for {payment_type}'),
+                        error_type="conditional_validation_error"
+                    )
+        
+        # Validate groups
+        groups = validation.get('groups', [])
+        if groups and full_record:
+            for group_name in groups:
+                if self.group_manager.is_group_enabled(group_name):
+                    group_result = self._validate_field_groups(field_name, value, full_record, [group_name])
+                    if not group_result.valid:
+                        return group_result
+        
+        # Validate field dependencies
+        if hasattr(self.dependency_manager, "get_dependencies"):
+            deps = self.dependency_manager.get_dependencies(field_name)
+            if deps and full_record:
+                for dep in deps:
+                    target_field = dep
+                    # Handle different return types
+                    if hasattr(dep, "target_field"):
+                        target_field = dep.target_field
+                        
+                    if target_field in full_record:
+                        dep_result = self._validate_field_dependencies(field_name, value, full_record)
+                        if not dep_result.valid:
+                            return dep_result
         
         return ValidationResult(valid=True, field_name=field_name)
 
     def validate_field(self, field_name: str, value: Any, 
                       full_record: Optional[Dict[str, Any]] = None) -> ValidationResult:
         """Validate a single field value with dependency awareness."""
-        # First do basic field validation
-        result = self.validator.validate_field(field_name, value)
-        if not result.valid:
-            return result
-            
-        # Validate conditional rules
-        if full_record:
-            result = self._validate_field(field_name, value, full_record)
-            if not result.valid:
-                return result
-            
-            # Get field properties
-            field_config = self._get_field_config(field_name)
-            
-            # Check if field belongs to any validation groups
-            groups = field_config.get('validation', {}).get('groups', [])
-            if groups:
-                group_result = self._validate_field_groups(field_name, value, full_record, groups)
-                if not group_result.valid:
-                    return group_result
-                    
-            # Check direct dependencies
-            if field_name in self.dependency_manager.dependencies:
-                dep_result = self._validate_field_dependencies(field_name, value, full_record)
-                if not dep_result.valid:
-                    return dep_result
-            
-        return ValidationResult(valid=True, field_name=field_name)
+        return self._validate_field(field_name, value, full_record)
     
     def _validate_field_groups(self, field_name: str, value: Any, 
                              record: Dict[str, Any], groups: List[str]) -> ValidationResult:
         """Validate a field according to its validation groups."""
+        all_dependencies = set()
+        
         for group_name in groups:
             if not self.group_manager.is_group_enabled(group_name):
                 continue
@@ -309,29 +380,61 @@ class ValidationEngine:
             rules = self.group_manager.get_group_rules(group_name)
             
             for rule in rules:
+                # Track dependencies before validation
+                components = rule.split(':')
+                if len(components) >= 3 and components[0] == 'compare':
+                    target_field = components[2]
+                    all_dependencies.add(target_field)
+                
                 result = self._apply_validation_rule(field_name, value, record, rule)
                 if not result.valid:
                     # Set error level based on group configuration
                     error_level = self.group_manager.get_group_error_level(group_name)
                     result.error_level = error_level
                     return result
+        
+        # Add all discovered dependencies to the dependency manager
+        for dep_field in all_dependencies:
+            if dep_field != field_name:  # Avoid self-dependencies
+                self.dependency_manager.add_dependency(
+                    field_name,
+                    dep_field,
+                    'group_validation',
+                    {'bidirectional': True}
+                )
                     
         return ValidationResult(valid=True, field_name=field_name)
     
     def _validate_field_dependencies(self, field_name: str, value: Any, 
                                    record: Dict[str, Any]) -> ValidationResult:
         """Validate a field's dependencies."""
-        for dep in self.dependency_manager.get_dependencies(field_name):
-            if dep.target_field not in record:
+        deps = []
+        
+        # Handle different implementations of get_dependencies
+        if hasattr(self.dependency_manager, "get_dependencies"):
+            deps = self.dependency_manager.get_dependencies(field_name)
+        
+        for dep in deps:
+            target_field = dep
+            validation_rule = {}
+            dependency_type = ""
+            
+            # Handle different return types
+            if hasattr(dep, "target_field"):
+                target_field = dep.target_field
+                validation_rule = getattr(dep, "validation_rule", {})
+                dependency_type = getattr(dep, "dependency_type", "")
+            
+            if target_field not in record:
                 continue
                 
-            target_value = record[dep.target_field]
+            target_value = record[target_field]
             
-            if dep.dependency_type == 'comparison' and dep.validation_rule:
+            if dependency_type == 'comparison' and validation_rule and 'operator' in validation_rule:
                 result = self._validate_comparison(
                     field_name, value,
-                    dep.target_field, target_value,
-                    dep.validation_rule['operator']
+                    target_field, target_value,
+                    validation_rule['operator']
                 )
                 if not result.valid:
                     return result
@@ -389,7 +492,11 @@ class ValidationEngine:
             if field_name == target_field:
                 # Skip self-comparisons
                 return ValidationResult(valid=True, field_name=field_name)
-                
+
+            # Ensure types are compatible for comparison
+            if type(value) != type(target_value):
+                raise TypeError(f"Cannot compare {field_name} with {target_field}: incompatible types {type(value)} and {type(target_value)}")
+
             if operator == 'less_than' and not value < target_value:
                 return ValidationResult(
                     valid=False,
@@ -397,7 +504,7 @@ class ValidationEngine:
                     error_message=f"{field_name} must be less than {target_field}",
                     error_type="comparison_error"
                 )
-                
+
             elif operator == 'less_than_equal' and not value <= target_value:
                 return ValidationResult(
                     valid=False,
@@ -405,7 +512,7 @@ class ValidationEngine:
                     error_message=f"{field_name} must be less than or equal to {target_field}",
                     error_type="comparison_error"
                 )
-                
+
             elif operator == 'greater_than' and not value > target_value:
                 return ValidationResult(
                     valid=False,
@@ -413,7 +520,7 @@ class ValidationEngine:
                     error_message=f"{field_name} must be greater than {target_field}",
                     error_type="comparison_error"
                 )
-                
+
             elif operator == 'greater_than_equal' and not value >= target_value:
                 return ValidationResult(
                     valid=False,
@@ -421,7 +528,7 @@ class ValidationEngine:
                     error_message=f"{field_name} must be greater than or equal to {target_field}",
                     error_type="comparison_error"
                 )
-                
+
             elif operator == 'equal' and value != target_value:
                 return ValidationResult(
                     valid=False,
@@ -429,7 +536,7 @@ class ValidationEngine:
                     error_message=f"{field_name} must equal {target_field}",
                     error_type="comparison_error"
                 )
-                
+
             elif operator == 'not_equal' and value == target_value:
                 return ValidationResult(
                     valid=False,
@@ -437,9 +544,9 @@ class ValidationEngine:
                     error_message=f"{field_name} must not equal {target_field}",
                     error_type="comparison_error"
                 )
-                
+
             return ValidationResult(valid=True, field_name=field_name)
-            
+
         except TypeError as e:
             logger.warning(f"Type error during comparison validation: {str(e)}")
             return ValidationResult(
@@ -455,18 +562,75 @@ class ValidationEngine:
         if field_name in self.field_properties:
             return self.field_properties[field_name]
             
-        # Check pattern-based field properties
+        # Check type-specific field properties
         for field_type, type_config in self.field_properties.items():
             if not isinstance(type_config, dict):
                 continue
                 
-            for subtype, subtype_config in type_config.items():
-                if not isinstance(subtype_config, dict):
-                    continue
-                    
-                fields = subtype_config.get('fields', [])
-                if isinstance(fields, list) and field_name in fields:
-                    return subtype_config
+            # Check numeric fields
+            if field_type == 'numeric':
+                for subtype in ('money', 'integer', 'decimal'):
+                    if subtype in type_config:
+                        subtype_config = type_config[subtype]
+                        if field_name in subtype_config.get('fields', []):
+                            return subtype_config
+                            
+            # Check string fields
+            elif field_type == 'string':
+                for subtype in ('agency_code', 'uei', 'naics', 'psc', 'zip_code', 'phone', 'state_code', 'country_code'):
+                    if subtype in type_config:
+                        subtype_config = type_config[subtype]
+                        if field_name in subtype_config.get('fields', []):
+                            return subtype_config
+                            
+            # Check date fields
+            elif field_type == 'date':
+                for subtype in ('standard', 'not_future'):
+                    if subtype in type_config:
+                        subtype_config = type_config[subtype]
+                        if field_name in subtype_config.get('fields', []):
+                            return subtype_config
+                            
+            # Check boolean fields
+            elif field_type == 'boolean':
+                if 'standard' in type_config:
+                    subtype_config = type_config['standard']
+                    if field_name in subtype_config.get('fields', []):
+                        return subtype_config
+                        
+            # Check enum fields
+            elif field_type == 'enum':
+                for subtype in ('contract_type', 'idv_type', 'action_type', 'contract_pricing', 'yes_no_extended'):
+                    if subtype in type_config:
+                        subtype_config = type_config[subtype]
+                        if field_name in subtype_config.get('fields', []):
+                            return subtype_config
+                            
+            # Check derived fields
+            elif field_type == 'derived':
+                if 'fiscal_year' in type_config:
+                    subtype_config = type_config['fiscal_year']
+                    if field_name in subtype_config.get('fields', []):
+                        return subtype_config
+                        
+            # Check pattern-based fields for any other type
+            else:
+                for subtype, subtype_config in type_config.items():
+                    if not isinstance(subtype_config, dict):
+                        continue
+                        
+                    fields = subtype_config.get('fields', [])
+                    if isinstance(fields, list):
+                        # Check exact match
+                        if field_name in fields:
+                            return subtype_config
+                            
+                        # Check pattern match
+                        for pattern in fields:
+                            if '*' in pattern:
+                                pattern_regex = pattern.replace('*', '.*')
+                                if re.match(pattern_regex, field_name):
+                                    return subtype_config
                     
         return {}
     
@@ -484,16 +648,67 @@ class ValidationEngine:
 
     def get_validation_order(self) -> List[str]:
         """Get fields in dependency order for validation."""
-        if not hasattr(self, 'dependency_manager') or not self.dependency_manager:
-            # Ensure default fields are included
-            return list(self.field_properties.keys())
-            
-        # Get order from dependency manager, ensuring all fields are included
-        order = self.dependency_manager.get_validation_order()
+        all_fields = set()
         
-        # Add any missing fields at the end
-        for field in self.field_properties:
-            if field not in order:
-                order.append(field)
+        # Add fields from field properties
+        all_fields.update(self.field_properties.keys())
+        
+        # Add fields from validation groups
+        for group in self.group_manager.groups.values():
+            for rule in group.rules:
+                components = rule.split(':')
+                if len(components) >= 3:
+                    all_fields.add(components[2])  # Add target field
+        
+        # Get ordered list from dependency manager
+        if hasattr(self.dependency_manager, 'get_validation_order'):
+            order = self.dependency_manager.get_validation_order()
+            
+            # Add any remaining fields that aren't in the dependency order
+            for field in all_fields:
+                if field not in order:
+                    order.append(field)
+            return order
+            
+        # If dependency manager doesn't have proper method, return all fields
+        return list(all_fields)
+
+    def _get_unvalidated_dependencies(self, field_name: str, record: Dict[str, Any]) -> List[str]:
+        """Get list of unvalidated dependencies for a field.
+        
+        Args:
+            field_name: The field to check dependencies for
+            record: The record being validated
+            
+        Returns:
+            List of field names that need validation
+        """
+        unvalidated = []
+        deps = []
+        
+        if hasattr(self.dependency_manager, "get_dependencies"):
+            deps = self.dependency_manager.get_dependencies(field_name)
+            
+        for dep in deps:
+            target_field = dep
+            # Handle different return types
+            if hasattr(dep, "target_field"):
+                target_field = dep.target_field
+            elif isinstance(dep, dict) and 'target' in dep:
+                target_field = dep['target']
                 
-        return order
+            # Skip if validator doesn't exist
+            if target_field not in self.validators:
+                continue
+                
+            try:
+                # Check if field is validated
+                validator = self.validators[target_field]
+                if not validator.is_validated(record):
+                    unvalidated.append(target_field)
+            except Exception as e:
+                # Skip dependencies that raise exceptions during validation check
+                logger.warning(f"Error checking validation status for {target_field}: {str(e)}")
+                continue
+                
+        return unvalidated

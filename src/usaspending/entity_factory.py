@@ -1,47 +1,40 @@
-"""Entity factory for store creation."""
-from typing import Dict, Any, Optional
-import logging
-from .entity_store import EntityStore
-from .config import ConfigManager
-from .exceptions import EntityStoreError, ConfigurationError
+"""Entity factory for creating and managing entity stores."""
+from pathlib import Path
+from typing import Dict, Any, Optional, Union
 
-logger = logging.getLogger(__name__)
+from .config import ConfigManager
+from .entity_store import EntityStore
+from .entity_mapper import EntityMapper
+from .validation import ValidationEngine
+from .exceptions import EntityError
 
 class EntityFactory:
-    """Factory class for creating entity stores."""
-    
-    @classmethod
-    def create_store(cls, base_path: str, entity_type: str, config_manager: ConfigManager) -> Optional[EntityStore]:
-        """Create an entity store instance."""
+    """Factory for creating and managing entity stores."""
+
+    def __init__(self, config: Union[ConfigManager, Dict[str, Any]]):
+        """Initialize with configuration."""
+        if isinstance(config, dict):
+            self.config_manager = ConfigManager(config)
+        else:
+            self.config_manager = config
+            
+        self.config = self.config_manager.get_config()
+        output_dir = Path(self.config['system']['io']['output']['directory'])
+        self.base_path = str(output_dir / 'entities')
+        self.validator = ValidationEngine(self.config)
+
+    def create_store(self, entity_type: str) -> EntityStore:
+        """Create a new entity store instance."""
         try:
-            if not config_manager.validate_entity(entity_type):
-                raise EntityStoreError(f"Invalid or disabled entity type: {entity_type}")
-            
-            return EntityStore(base_path, entity_type, config_manager)
-            
+            return EntityStore(self.base_path, entity_type, self.config_manager)
         except Exception as e:
-            logger.error(f"Error creating store for {entity_type}: {str(e)}")
-            return None
-    
-    @classmethod
-    def create_stores_from_config(cls, base_path: str, config_manager: ConfigManager) -> Dict[str, EntityStore]:
-        """Create all entity stores defined in configuration."""
-        stores = {}
-        
-        try:
-            # Get ordered entities (includes dependency validation)
-            processing_order = config_manager.get_processing_order()
-            
-            # Create stores in order
-            for _, entity_type in processing_order:
-                store = cls.create_store(base_path, entity_type, config_manager)
-                if store:
-                    stores[entity_type] = store
-                else:
-                    logger.error(f"Failed to create store for {entity_type}")
-                    
-            return stores
-            
-        except Exception as e:
-            logger.error(f"Unexpected error creating stores: {str(e)}")
-            return {}
+            raise EntityError(f"Failed to create entity store for {entity_type}: {str(e)}") from e
+
+    def _make_hashable_key(self, key: Union[str, Dict[str, str]]) -> str:
+        """Convert a key into a hashable format."""
+        if isinstance(key, str):
+            return key
+        elif isinstance(key, dict):
+            return tuple(sorted(key.items())).__str__()
+        else:
+            raise ValueError(f"Invalid key type: {type(key)}")

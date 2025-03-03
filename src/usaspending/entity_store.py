@@ -13,6 +13,8 @@ from .entity_mapper import EntityMapper
 from .entity_serializer import EntitySerializer
 from .utils import generate_entity_key
 from .exceptions import TransformationError
+from .keys import CompositeKey
+from .field_dependencies import FieldDependency
 from .types import (
     ValidationRule,
     EntityData,
@@ -147,45 +149,128 @@ class EntityStore:
         return current if isinstance(current, dict) else None
             
     def extract_entity_data(self, source_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract entity data from source data according to mapping rules.
-        
-        Args:
-            source_data: Dictionary containing source data
+        """Extract entity data from source data according to mapping rules."""
+        if not source_data:
+            return None
             
-        Returns:
-            Optional[Dict[str, Any]]: Mapped entity data or None if required fields missing
-        """
         result = {}
-        
-        # Check for required key fields
-        for key_field in self.key_fields:
-            if key_field not in source_data or not source_data[key_field]:
-                return None
+        field_mappings = self.entity_config.get('field_mappings', {})
         
         # Process direct mappings
-        for target_field, mapping in self.direct_mappings.items():
-            source_field = mapping.get("field")
-            if source_field not in source_data:
+        for target_field, mapping in field_mappings.get('direct', {}).items():
+            if isinstance(mapping, str):
+                # Simple direct field mapping
+                if mapping in source_data:
+                    result[target_field] = source_data[mapping]
+            elif isinstance(mapping, dict):
+                source_field = mapping.get("field")
+                if source_field and source_field in source_data:
+                    value = source_data[source_field]
+                    # Apply transformations if defined
+                    if "transformation" in mapping:
+                        try:
+                            value = self._apply_transformation(value, mapping["transformation"])
+                        except TransformationError as e:
+                            logger.warning(f"Transformation error for {target_field}: {str(e)}")
+                            continue
+                    result[target_field] = value
+
+        # Process multi-source mappings
+        for target_field, mapping in field_mappings.get('multi_source', {}).items():
+            if not isinstance(mapping, dict):
                 continue
                 
-            value = source_data[source_field]
+            sources = mapping.get('sources', [])
+            strategy = mapping.get('strategy', 'first_non_empty')
             
-            # Apply transformations if defined
-            if "transformation" in mapping:
-                try:
-                    value = self._apply_transformation(value, mapping["transformation"])
-                    if value is None:  # Skip fields that failed transformation
-                        continue
-                except TransformationError:
-                    continue
+            if strategy == 'first_non_empty':
+                for source in sources:
+                    if source in source_data and source_data[source]:
+                        result[target_field] = source_data[source]
+                        break
+            elif strategy == 'concatenate':
+                values = [str(source_data.get(s, '')) for s in sources if s in source_data]
+                if values:
+                    result[target_field] = mapping.get('separator', ' ').join(values)
+
+        # Process object mappings
+        for target_field, mapping in field_mappings.get('object', {}).items():
+            if not isinstance(mapping, dict):
+                continue
+                
+            obj_data = {}
+            for obj_field, source_field in mapping.get('fields', {}).items():
+                if source_field in source_data:
+                    obj_data[obj_field] = source_data[source_field]
                     
-            result[target_field] = value
-        
-        # Additional mapping types...
-        
-        return result
+            # Handle nested objects
+            for nested_name, nested_config in mapping.get('nested_objects', {}).items():
+                if isinstance(nested_config, dict):
+                    nested_data = {}
+                    for nested_field, nested_source in nested_config.get('fields', {}).items():
+                        if nested_source in source_data:
+                            nested_data[nested_field] = source_data[nested_source]
+                    if nested_data:
+                        obj_data[nested_name] = nested_data
+                        
+            if obj_data:
+                result[target_field] = obj_data
+
+        # Process reference mappings
+        for target_field, mapping in field_mappings.get('reference', {}).items():
+            if not isinstance(mapping, dict):
+                continue
+                
+            entity = mapping.get('entity')
+            key_field = mapping.get('key_field')
+            if entity and key_field and key_field in source_data:
+                result[f"{target_field}_ref"] = {
+                    "entity": entity,
+                    "key": source_data[key_field]
+                }
+                
+            # Handle composite keys
+            key_fields = mapping.get('key_fields', [])
+            key_prefix = mapping.get('key_prefix', '')
+            if entity and key_fields:
+                ref_key = {}
+                for field in key_fields:
+                    source_field = f"{key_prefix}_{field}" if key_prefix else field
+                    if source_field in source_data:
+                        ref_key[field] = source_data[source_field]
+                if ref_key:
+                    result[f"{target_field}_ref"] = {
+                        "entity": entity,
+                        "key": ref_key
+                    }
+
+        # Process template mappings
+        for target_field, mapping in field_mappings.get('template', {}).items():
+            if not isinstance(mapping, dict):
+                continue
+                
+            templates = mapping.get('templates', {})
+            for template_name, template_str in templates.items():
+                try:
+                    filled_template = template_str.format(**source_data)
+                    if filled_template:
+                        if target_field not in result:
+                            result[target_field] = {}
+                        result[target_field][template_name] = filled_template
+                except (KeyError, ValueError) as e:
+                    logger.warning(f"Template error for {target_field}.{template_name}: {str(e)}")
+                    continue
+
+        # Add validation after all mappings are processed
+        if result and self.validator:
+            validation_results = self.validator.validate_record(result)
+            if not all(r.valid for r in validation_results):
+                logger.warning(f"Validation failed for {self.entity_type}")
+                return None
+
+        return result if result else None
             
-    def add_entity(self, data: Optional[Dict[str, Any]]) -> Optional[Union[str, Dict[str, str]]]:
+    def add_entity(self, data: Optional[Dict[str, Any]]) -> Optional[Union[str, Dict[str, str], CompositeKey]]:
         """Add an entity to the store."""
         if not data:
             self.cache.add_skipped("invalid_data")
@@ -200,15 +285,41 @@ class EntityStore:
             self.cache.add_skipped("missing_key_fields")
             return None
             
-        is_update = isinstance(entity_key, str) and entity_key in self.cache.cache
-        self.cache.add_entity(entity_key, data, is_update)
+        # Convert to hashable format if needed
+        cache_key = self._make_hashable_key(entity_key)
+        is_update = cache_key in self.cache.cache
+        
+        # Store the original key format for external references
+        original_key = entity_key if isinstance(entity_key, dict) else cache_key
+        self.cache.add_entity(cache_key, data, is_update)
         
         # Process relationships if configured
-        if data and entity_key:
-            self.process_relationships(data, {"key": entity_key})
+        if data and cache_key:
+            self.process_relationships(data, {"key": cache_key})
                 
-        return entity_key
+        return original_key
+
+    def _make_hashable_key(self, key: Union[str, Dict[str, str], CompositeKey]) -> Union[str, CompositeKey]:
+        """Convert a key into a hashable format.
+        
+        Args:
+            key: The key to convert. Can be a string, dictionary, or CompositeKey
             
+        Returns:
+            A hashable version of the key (either string or CompositeKey)
+            
+        Raises:
+            ValueError: If the key is neither a string, dictionary, nor CompositeKey
+        """
+        if isinstance(key, (str, CompositeKey)):
+            return key
+        elif isinstance(key, dict):
+            # Convert all dictionary values to strings to ensure consistent hashing
+            key_dict = {str(k): str(v) for k, v in key.items()}
+            return CompositeKey(key_dict)
+        else:
+            raise ValueError(f"Invalid key type: {type(key)}")
+
     def _generate_entity_key(self, entity_data: Dict[str, Any]) -> Optional[str]:
         """Generate entity key using mapper."""
         return self.mapper.build_key(entity_data)
@@ -219,14 +330,18 @@ class EntityStore:
             return
             
         entity_key = context.get('key')
-        if not entity_key or not isinstance(entity_key, str):
+        if not entity_key:
             logger.warning(f"Invalid entity key in context for {self.entity_type}")
             return
+
+        # Ensure key is hashable
+        if isinstance(entity_key, dict):
+            entity_key = self._make_hashable_key(entity_key)
 
         self._process_flat_relationships(entity_data, entity_key)
         self._process_hierarchical_relationships(entity_data, entity_key)
 
-    def _process_flat_relationships(self, entity_data: Dict[str, Any], entity_key: str) -> None:
+    def _process_flat_relationships(self, entity_data: Dict[str, Any], entity_key: Union[str, CompositeKey]) -> None:
         """Process flat relationships."""
         for rel_config in self._relationship_configs['flat']:
             from_field = rel_config.get('from_field')
@@ -241,11 +356,27 @@ class EntityStore:
             to_value = entity_data.get(to_field)
             
             if from_value and to_value:
+                # Handle composite keys in relationship values
+                if isinstance(from_value, dict):
+                    from_value = self._make_hashable_key(from_value)
+                if isinstance(to_value, dict):
+                    to_value = self._make_hashable_key(to_value)
+                    
                 if isinstance(from_value, (list, set)):
                     for value in from_value:
-                        self.add_relationship(str(value), rel_type, str(to_value), inverse_type)
+                        self.add_relationship(
+                            self._make_hashable_key(value) if isinstance(value, dict) else str(value),
+                            rel_type,
+                            self._make_hashable_key(to_value) if isinstance(to_value, dict) else str(to_value),
+                            inverse_type
+                        )
                 else:
-                    self.add_relationship(str(from_value), rel_type, str(to_value), inverse_type)
+                    self.add_relationship(
+                        self._make_hashable_key(from_value) if isinstance(from_value, dict) else str(from_value),
+                        rel_type,
+                        self._make_hashable_key(to_value) if isinstance(to_value, dict) else str(to_value),
+                        inverse_type
+                    )
 
     def _process_hierarchical_relationships(self, entity_data: Dict[str, Any], entity_key: str) -> None:
         """Process hierarchical relationships."""
@@ -272,13 +403,21 @@ class EntityStore:
                 
                 self.add_relationship(from_key, rel_type, to_key, inverse_type)
 
-    def _extract_entity_keys(self, entity_data: Dict[str, Any]) -> Dict[str, str]:
+    def _extract_entity_keys(self, entity_data: Dict[str, Any]) -> Dict[str, Union[str, CompositeKey]]:
         """Extract entity keys from data for hierarchical relationships."""
-        return {
-            level: str(entity_data[key_field])
-            for level, key_field in self.entity_config.get('key_fields', {}).items()
-            if key_field in entity_data
-        }
+        keys = {}
+        for level, key_field in self.entity_config.get('key_fields', {}).items():
+            if isinstance(key_field, list):
+                # Handle composite keys
+                key_parts = {}
+                for field in key_field:
+                    if field in entity_data:
+                        key_parts[field] = str(entity_data[field])
+                if key_parts:
+                    keys[level] = self._make_hashable_key(key_parts)
+            elif key_field in entity_data:
+                keys[level] = str(entity_data[key_field])
+        return keys
 
     def add_relationship(self, from_key: str, rel_type: str, to_key: str, inverse_type: Optional[str] = None) -> None:
         """Add a relationship between entities."""
@@ -350,3 +489,54 @@ class EntityStore:
             dict(self.relationships),  # Convert defaultdict to regular dict
             self.cache.get_stats()
         )
+
+class FieldDependencyManager:
+    def __init__(self):
+        self.dependencies = {}
+
+    def add_dependency(self, field_name, target_field, dependency_type, metadata=None):
+        """Add dependency with cycle detection."""
+        # Check if adding this dependency would create a cycle
+        if metadata and metadata.get('bidirectional') and self._has_path(target_field, field_name):
+            # For bidirectional dependencies, mark them specially
+            if metadata is None:
+                metadata = {}
+            metadata['circular'] = True
+        
+        # Add to dependency graph
+        if field_name not in self.dependencies:
+            self.dependencies[field_name] = []
+        self.dependencies[field_name].append({
+            'target': target_field,
+            'type': dependency_type,
+            'metadata': metadata
+        })
+
+    def _has_path(self, start, end, visited=None):
+        """Check if there's a path from start to end in dependency graph."""
+        if visited is None:
+            visited = set()
+        
+        if start == end:
+            return True
+        
+        if start in visited:
+            return False
+        
+        visited.add(start)
+        
+        for dep in self.dependencies.get(start, []):
+            if self._has_path(dep['target'], end, visited):
+                return True
+                
+        return False
+
+    def get_dependencies(self, field_name: str):
+        return self.dependencies.get(field_name, set())
+
+    def get_dependent_fields(self, target_field: str):
+        dependents = set()
+        for field, deps in self.dependencies.items():
+            if any(target_field in dep.dependencies for dep in deps):
+                dependents.add(field)
+        return dependents

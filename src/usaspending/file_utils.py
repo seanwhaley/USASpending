@@ -6,10 +6,17 @@ import csv
 import time
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, Callable, TextIO, BinaryIO, Iterator
+from typing import Any, Dict, List, Optional, Union, Callable, TextIO, BinaryIO, Iterator, TypeVar
+from typing_extensions import TypeAlias
 from contextlib import contextmanager
 from io import StringIO, BytesIO
 from functools import wraps
+
+# Type definitions for improved type safety
+T = TypeVar('T')
+JsonData = Dict[str, Any]
+CsvRow = Dict[str, str]
+BatchType = List[CsvRow]
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +204,7 @@ def validate_file_path(path: str, mode: str = 'r') -> None:
 
 @contextmanager
 def safe_open_file(path: str, mode: str = 'r', encoding: Optional[str] = None, 
-                  newline: Optional[str] = None, **kwargs) -> TextIO:
+                  newline: Optional[str] = None, **kwargs) -> Iterator[TextIO]:
     """Safely open a file with validation and error handling.
     
     Args:
@@ -419,7 +426,7 @@ def write_csv_file(path: str, data: List[Dict[str, Any]], fieldnames: Optional[L
 
 @contextmanager
 def csv_reader(path: str, encoding: str = 'utf-8', delimiter: str = ',', 
-              quotechar: str = '"', batch_size: int = 1000) -> Iterator[Dict[str, Any]]:
+              quotechar: str = '"', batch_size: int = 1000) -> Iterator[BatchType]:
     """Generator for reading CSV in batches with proper resource management.
     
     Args:
@@ -573,7 +580,7 @@ def get_file_size(path: str) -> int:
     return os.path.getsize(path)
 
 def get_memory_efficient_reader(path: str, encoding: str = 'utf-8', 
-                              batch_size: int = 1000, **kwargs) -> Iterator:
+                              batch_size: int = 1000, **kwargs) -> Iterator[Union[BatchType, JsonData]]:
     """Get memory-efficient reader based on file type.
     
     Args:

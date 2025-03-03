@@ -595,6 +595,23 @@ field_properties:
       fields:
         - action_date_fiscal_year
 
+  # Field dependencies
+  field_dependencies:
+    end_date:
+      - type: comparison
+        target_field: start_date
+        validation_rule:
+          operator: greater_than
+          bidirectional: true  # Mark as bidirectional
+        error_message: "End date must be after start date"
+    start_date:
+      - type: comparison
+        target_field: end_date
+        validation_rule:
+          operator: less_than
+          bidirectional: true  # Mark as bidirectional
+        error_message: "Start date must be before end date"
+
 #==============================================================================
 # 4. ENTITY RELATIONSHIPS
 #==============================================================================

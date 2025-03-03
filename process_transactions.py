@@ -14,7 +14,7 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from src.usaspending.config import get_config
+from src.usaspending.config import ConfigManager
 from src.usaspending.logging_config import configure_logging, get_logger
 from src.usaspending.processor import convert_csv_to_json
 from src.usaspending.fallback_messages import get_fallback_message
@@ -64,8 +64,11 @@ def main() -> int:
         
         logger.info("Starting USASpending transaction processing")
         
-        # Process transactions - all config handling happens in convert_csv_to_json
-        if convert_csv_to_json(args.config):
+        # Initialize config manager with the specified config file
+        config_manager = ConfigManager(args.config)
+        
+        # Process transactions using the ConfigManager instance directly
+        if convert_csv_to_json(config_manager):
             logger.info("Processing completed successfully")
             return 0
         

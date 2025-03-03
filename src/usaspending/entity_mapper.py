@@ -1,11 +1,9 @@
 """Entity data mapping and conversion functionality."""
-from typing import Dict, Any, Optional, List, Set, Union, Callable
-from datetime import datetime
-import re
+from typing import Dict, Any, Optional, Union
 import logging
-from .config import ConfigManager
-from .utils import TypeConverter, generate_entity_key
+from .utils import TypeConverter
 from .exceptions import EntityMappingError
+from .keys import CompositeKey
 
 logger = logging.getLogger(__name__)
 
@@ -111,8 +109,13 @@ class EntityMapper:
         for target_field, mapping_config in self.field_mapping["object"].items():
             if "fields" not in mapping_config:
                 continue
+            
+            # Create the nested object structure
+            if target_field not in result:
+                result[target_field] = {}
                 
-            nested_result = {}
+            nested_result = result[target_field]
+            
             for prop_name, prop_mapping in mapping_config["fields"].items():
                 source_field = prop_mapping.get("field") if isinstance(prop_mapping, dict) else prop_mapping
                 
@@ -127,29 +130,38 @@ class EntityMapper:
                             if transform_type:
                                 value = converter.convert_value(value, transform_type)
                                 if value is None:
-                                    # Skip if transformation or validation failed
+                                    # Skip just this field if transformation or validation failed
                                     continue
                         except Exception as e:
                             logger.warning(f"Transformation error for {prop_name}: {str(e)}")
                             continue
                     
                     nested_result[prop_name] = value
-            
-            if nested_result:
-                result[target_field] = nested_result
     
     def _map_reference_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
         """Map fields that reference other entities."""
-        for target_field, mapping_config in self.field_mapping["reference"].items():
+        for target_field, mapping_config in self.field_mapping.get("reference", {}).items():
             if "entity_type" not in mapping_config or "fields" not in mapping_config:
                 continue
                 
             ref_data = {}
-            for field_name, field_mapping in mapping_config["fields"].items():
-                source_field = field_mapping.get("field") if isinstance(field_mapping, dict) else field_mapping
-                
+            for field_name, field_config in mapping_config["fields"].items():
+                source_field = field_config.get("field")
                 if source_field and source_field in source_data:
-                    ref_data[field_name] = source_data[source_field]
+                    value = source_data[source_field]
+                    # Apply any transformations if configured
+                    if isinstance(field_config, dict) and "transformation" in field_config:
+                        try:
+                            converter = TypeConverter(self.config)
+                            transform_type = field_config["transformation"].get("type")
+                            if transform_type:
+                                value = converter.convert_value(value, transform_type)
+                                if value is None:
+                                    continue
+                        except Exception as e:
+                            logger.warning(f"Transformation error for {field_name}: {str(e)}")
+                            continue
+                    ref_data[field_name] = value
             
             if ref_data:
                 result[target_field] = {
@@ -177,3 +189,34 @@ class EntityMapper:
                 result[target_field] = template.format(**template_values)
             except (KeyError, ValueError) as e:
                 logger.warning(f"Template formatting error for {target_field}: {str(e)}")
+    
+    def build_key(self, entity_data: Dict[str, Any]) -> Optional[Union[str, Dict[str, str], CompositeKey]]:
+        """Build entity key from data."""
+        entity_config = self.config.get("entities", {}).get(self.entity_type, {})
+        key_fields = entity_config.get("key_fields", [])
+        
+        if not key_fields:
+            return None
+            
+        if isinstance(key_fields, str):
+            # Single field key
+            if key_fields not in entity_data:
+                return None
+            return str(entity_data[key_fields])
+            
+        elif isinstance(key_fields, list):
+            # Composite key
+            key_parts = {}
+            for field in key_fields:
+                if field not in entity_data:
+                    return None
+                key_parts[field] = str(entity_data[field])
+            return CompositeKey(key_parts)
+            
+        return None
+
+    def transform_money(self, value: str, config: dict) -> float:
+        """Transform money values by stripping characters and converting to float."""
+        if isinstance(value, str):
+            return float(value.strip(config.get('strip_characters', '$,')))
+        return value

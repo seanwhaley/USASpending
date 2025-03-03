@@ -4,6 +4,8 @@ import jsonschema
 import logging
 import inspect
 import copy
+import os
+import msvcrt  # For Windows
 from pathlib import Path
 from typing import Dict, Any, Optional, List, TypeVar, Type, Set, Union, get_type_hints, get_origin, get_args
 from dataclasses import dataclass
@@ -11,12 +13,45 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 from functools import lru_cache
 
+# Only import fcntl on Unix systems
+if os.name != 'nt':
+    import fcntl
+
 from .exceptions import ConfigurationError
 from .config_schema import ENTITY_CONFIG_SCHEMA
 from .types import ValidationResult
 
 logger = logging.getLogger(__name__)
 T = TypeVar('T')
+
+def atomic_file_operation(file_path: Path, operation: callable):
+    """Execute file operation with proper locking."""
+    try:
+        with open(file_path, 'r+' if os.path.exists(file_path) else 'w+') as f:
+            if os.name == 'nt':  # Windows
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError as e:
+                    # Handle case where file is already locked
+                    logger.error(f"File is locked: {e}")
+                    raise ConfigurationError(f"File is locked: {e}") from e
+            else:  # Unix
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            try:
+                return operation(f)
+            finally:
+                if os.name == 'nt':
+                    try:
+                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass  # Ignore errors during unlock
+                else:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+    except IOError as e:
+        logger.error(f"File operation failed: {e}")
+        raise ConfigurationError(f"File operation failed: {e}") from e
 
 @dataclass
 class CachedValidation:
@@ -29,68 +64,135 @@ class ConfigManager:
     _instance = None
     _initialized = False
     
-    def __new__(cls, config_path: str = None):
+    def __new__(cls, config_path_or_dict: Union[str, Path, Dict[str, Any]] = None):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
     
-    def __init__(self, config_path: str = None):
+    def __init__(self, config_path_or_dict: Union[str, Path, Dict[str, Any]] = None):
         if self._initialized:
-            if config_path and config_path != self._config_path:
-                self._config_path = Path(config_path)
-                self._load_config()
+            if config_path_or_dict:
+                self._update_config(config_path_or_dict)
             return
-            
-        if not config_path:
-            raise ValueError("config_path is required for initial ConfigManager instance")
-            
-        # Core configuration
-        self._config: Dict[str, Any] = {}
-        self._config_path = Path(config_path)
-        self._last_load_time = 0
+
+        self._setup_initial_state()
         
-        # Validation state
+        if config_path_or_dict is not None:
+            self._update_config(config_path_or_dict)
+        
+        ConfigManager._initialized = True
+
+    def _setup_initial_state(self):
+        """Initialize configuration manager state."""
+        self._config: Dict[str, Any] = {}
+        self._config_path: Optional[Path] = None
+        self._last_load_time = 0
+        self._validation_cache: Dict[str, CachedValidation] = {}
+        self._cache_ttl = timedelta(minutes=5)
+        self._cache_stats = defaultdict(int)
         self._dynamic_types: Dict[str, Type] = {}
         self.essential_fields: Set[str] = set()
         self.validation_types: Dict[str, Any] = {}
-        
-        # Caching
-        self._validation_cache: Dict[str, CachedValidation] = {}
-        self._cache_ttl = timedelta(minutes=5)  # Cache validation results for 5 minutes
-        self._cache_stats = defaultdict(int)
-        
-        ConfigManager._initialized = True
-        self._load_config()
-        
+
+    def _update_config(self, config_path_or_dict: Union[str, Path, Dict[str, Any]]):
+        """Update configuration from path or dictionary."""
+        if isinstance(config_path_or_dict, dict):
+            self._config_path = None
+            self._config = self._merge_default_schemas(config_path_or_dict)
+            self._validate_config_structure(self._config)
+        else:
+            self._config_path = Path(config_path_or_dict)
+            self._load_config()
+
     def _load_config(self) -> None:
-        """Load and validate configuration from YAML."""
-        try:
-            raw_config = yaml.safe_load(self._config_path.read_text(encoding='utf-8'))
+        """Load and validate configuration from YAML with atomic file operations."""
+        if not self._config_path:
+            return
+
+        def read_config(f):
+            raw_config = yaml.safe_load(f.read())
             merged_config = self._merge_default_schemas(raw_config)
             self._validate_config_structure(merged_config)
-            self._config = merged_config
-            self._last_load_time = self._config_path.stat().st_mtime
-            
-            # Initialize validation components
+            return merged_config, self._config_path.stat().st_mtime
+
+        try:
+            self._config, self._last_load_time = atomic_file_operation(
+                self._config_path, read_config)
             self._build_dynamic_types()
             self._init_validation_types()
             self._clear_validation_cache()
-            
         except Exception as e:
-            self._config = {}
-            self._last_load_time = 0
-            raise ConfigurationError(f"Config load failed: {str(e)}")
+            logger.error(f"Failed to load configuration: {e}")
+            raise ConfigurationError(f"Configuration load failed: {e}") from e
 
     def _validate_config_structure(self, config: Dict[str, Any]) -> None:
         """Validate core configuration structure."""
         if not isinstance(config, dict):
             raise ConfigurationError("Root config must be a dictionary")
-            
-        for entity_type, entity_config in config.items():
-            try:
-                jsonschema.validate(instance=entity_config, schema=ENTITY_CONFIG_SCHEMA)
-            except jsonschema.exceptions.ValidationError as e:
-                raise ConfigurationError(f"Invalid {entity_type} config: {str(e)}")
+
+        # Ensure system section exists
+        if 'system' not in config:
+            config['system'] = {}
+
+        # Initialize required sections if missing
+        required_sections = {
+            'processing': {
+                'max_workers': 4,
+                'queue_size': 1000,
+                'create_index': True,
+                'entity_save_frequency': 100,
+                'incremental_save': True,
+                'log_frequency': 50
+            },
+            'io': {
+                'input': {
+                    'batch_size': 1000,
+                    'validate_input': True,
+                    'skip_invalid_rows': True
+                },
+                'output': {
+                    'entities_subfolder': 'entities',
+                    'transaction_base_name': 'transactions',
+                    'chunk_size': 5000
+                }
+            },
+            'formats': {
+                'csv': {
+                    'encoding': 'utf-8',
+                    'delimiter': ',',
+                    'quotechar': '"'
+                },
+                'json': {
+                    'indent': None,
+                    'ensure_ascii': False
+                }
+            },
+            'error_handling': {
+                'log_errors': True,
+                'stop_on_error': False,
+                'max_errors': 100
+            }
+        }
+
+        for section, defaults in required_sections.items():
+            if section not in config['system']:
+                config['system'][section] = defaults.copy()
+            else:
+                # Deep merge existing config with defaults
+                config['system'][section] = self._deep_merge(
+                    defaults,
+                    config['system'][section]
+                )
+
+    def _deep_merge(self, defaults: Dict, override: Dict) -> Dict:
+        """Recursively merge two dictionaries."""
+        result = defaults.copy()
+        for key, value in override.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._deep_merge(result[key], value)
+            else:
+                result[key] = value
+        return result
 
     def _build_dynamic_types(self) -> None:
         """Build type definitions from configuration."""
@@ -291,20 +393,27 @@ class ConfigManager:
 
     @property
     def config(self) -> Dict[str, Any]:
-        """Get full validated config dictionary."""
-        if self._config_has_changed():
+        """Get full validated config dictionary with atomic reload."""
+        if self._config_path and self._config_has_changed():
             self._load_config()
         return self._config
 
     def _config_has_changed(self) -> bool:
-        """Check if YAML file has been modified."""
-        if not self._config_path.exists():
-            raise ConfigurationError(f"Config file not found: {self._config_path}")
-        return self._config_path.stat().st_mtime > self._last_load_time
+        """Check if configuration file has changed with atomic operations."""
+        if not self._config_path or not self._config_path.exists():
+            return False
+
+        def check_modified_time(f):
+            return f.stat().st_mtime > self._last_load_time
+
+        try:
+            return atomic_file_operation(self._config_path, check_modified_time)
+        except ConfigurationError:
+            return False
         
     def get_entity_config(self, entity_type: str) -> Optional[Dict[str, Any]]:
         """Get validated config for entity type."""
-        if self._config_has_changed():
+        if self._config_path and self._config_has_changed():
             self._load_config()
         return self._config.get(entity_type)
 
@@ -410,10 +519,13 @@ class ConfigManager:
         """Get I/O configuration section."""
         return self.get_section("system.io", {})
     
-    def get_entity_config(self, entity_type: str) -> Dict[str, Any]:
-        """Get configuration for a specific entity type."""
-        entities = self.get_section("entities", {})
-        return entities.get(entity_type, {})
+    def get_entity_configs(self) -> Dict[str, Any]:
+        """Get all entity configurations."""
+        entities = {}
+        for name, config in self._config.items():
+            if isinstance(config, dict) and 'field_mappings' in config and 'key_fields' in config:
+                entities[name] = config
+        return entities
     
     def get_relationships(self) -> Dict[str, Any]:
         """Get entity relationships configuration."""
@@ -433,12 +545,24 @@ class ConfigManager:
     
     def reload_config(self):
         """Reload configuration from file."""
-        self._load_config()
+        if self._config_path:
+            self._load_config()
         # Clear caches
         self.get_section.cache_clear()
 
-def get_config(config_path: str) -> Dict[str, Any]:
-    """Get configuration singleton instance."""
-    return ConfigManager(config_path).config
+    # Methods to support iteration interface
+    def __iter__(self):
+        return iter(self._config.items())
+        
+    def items(self):
+        return self._config.items()
+        
+    def get(self, key, default=None):
+        return self._config.get(key, default)
+    
+    # Method needed by processor.py
+    def get_config(self):
+        return self._config
 
-__all__ = ['ConfigManager', 'get_config']
+# ConfigManager singleton provides all needed functionality
+__all__ = ['ConfigManager']

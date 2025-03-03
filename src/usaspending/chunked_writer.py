@@ -36,10 +36,11 @@ class ChunkedWriter:
         
     def _init_config(self) -> None:
         """Initialize configuration settings."""
-        proc_config = self.config.get('global', {}).get('processing', {})
+        # Change from global.processing to system.processing
+        proc_config = self.config.get('system', {}).get('processing', {})
         if not proc_config:
-            raise ChunkingError("Missing global.processing configuration section")
-            
+            raise ChunkingError("Missing system.processing configuration section")
+        
         # Core settings
         self.chunk_size = self._get_chunk_size(proc_config)
         self.max_chunk_size_mb = proc_config.get('max_chunk_size_mb')
