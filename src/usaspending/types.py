@@ -1,35 +1,59 @@
-"""Type definitions for the USASpending data processing package."""
+"""Type system for USASpending data processing."""
 from typing import Dict, List, Any, Set, Optional, Union, TypedDict, DefaultDict, Literal, Type
 from dataclasses import dataclass, field
 from datetime import datetime
 
-# Type Registry
-_TYPE_REGISTRY: Dict[str, type] = {}
-
-def register_type(name: str, type_class: type) -> None:
-    """Register an entity type."""
-    _TYPE_REGISTRY[name] = type_class
-
-def get_registered_type(name: str) -> Optional[type]:
-    """Get a registered entity type."""
-    return _TYPE_REGISTRY.get(name)
-
-def get_registered_types() -> Dict[str, type]:
-    """Get all registered entity types."""
-    return _TYPE_REGISTRY.copy()
-
-def load_types_from_config(config: Dict[str, Any]) -> None:
-    """Load and register entity types from configuration.
+# Type Manager
+class TypeManager:
+    """Manages type registration and loading from configuration."""
+    _instance = None
     
-    Args:
-        config: Configuration dictionary containing type definitions
-    """
-    entity_types = config.get('contracts', {}).get('entity_separation', {}).get('entities', {})
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
     
-    for entity_type in entity_types:
-        if entity_type not in _TYPE_REGISTRY:
-            # Create a new EntityData-based type for this entity
-            register_type(entity_type, EntityData)
+    def __init__(self):
+        if self._initialized:
+            return
+        self._initialized = True
+        self._registered_types: Dict[str, Type] = {}
+        
+    def register_type(self, name: str, type_class: Type) -> None:
+        """Register a type class for an entity."""
+        self._registered_types[name] = type_class
+        
+    def get_type(self, name: str) -> Optional[Type]:
+        """Get registered type class by name."""
+        return self._registered_types.get(name)
+        
+    def load_from_config(self, config: Dict[str, Any]) -> None:
+        """Load and register types from configuration."""
+        for entity_name, entity_config in config.items():
+            if isinstance(entity_config, dict) and 'type_info' in entity_config:
+                type_info = entity_config['type_info']
+                entity_class = type(
+                    f"{entity_name.title()}Entity",
+                    (EntityData,),
+                    {
+                        '__annotations__': type_info.get('annotations', {}),
+                        '__doc__': type_info.get('description', '')
+                    }
+                )
+                self.register_type(entity_name, entity_class)
+
+def get_type_manager() -> TypeManager:
+    """Get the global TypeManager instance."""
+    return TypeManager()
+
+def get_registered_type(name: str) -> Optional[Type]:
+    """Get a registered type class by name."""
+    return get_type_manager().get_type(name)
+
+def register_entity_type(name: str, type_class: Type) -> None:
+    """Register an entity type class."""
+    get_type_manager().register_type(name, type_class)
 
 # Core Validation Types
 @dataclass
@@ -55,9 +79,9 @@ class ValidationRule:
 class ValidationResult:
     """Result of a validation check."""
     valid: bool
-    message: Optional[str] = None
-    error_type: Optional[str] = None
     field_name: Optional[str] = None
+    error_message: Optional[str] = None
+    error_type: Optional[str] = None
 
 # Statistics Types
 @dataclass
@@ -234,4 +258,4 @@ EntityCache = Dict[str, EntityData]
 TypeRegistry = Dict[str, type]
 
 # Register built-in types
-register_type('recipient', EntityData)
+register_entity_type('recipient', EntityData)

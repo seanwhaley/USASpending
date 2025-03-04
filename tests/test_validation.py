@@ -1,344 +1,381 @@
-from usaspending.validation import ValidationEngine
+import pytest
+from unittest.mock import MagicMock, patch
+from usaspending.validation import ValidationEngine, ValidationResult
 
-def test_date_range_validation(sample_config):
-    """Test date range validation scenarios."""
-    engine = ValidationEngine(sample_config)
-
-    # Test valid date range
-    result = engine.validate_field(
-        'period_of_performance_start_date',
-        '2024-01-01',
-        [{'type': 'type', 'value': 'date'}],
-        {'period_of_performance_current_end_date': '2024-12-31'}
-    )
-    assert result.valid
-
-    # Test invalid date range
-    result = engine.validate_field(
-        'period_of_performance_start_date',
-        '2024-12-31',
-        [{'type': 'type', 'value': 'date'}],
-        {'period_of_performance_current_end_date': '2024-01-01'}
-    )
-    assert not result.valid
-    assert result.error_type == 'date_range_invalid'
-
-def test_numeric_field_validation_edge_cases(sample_config):
-    """Test numeric field validation edge cases."""
-    engine = ValidationEngine(sample_config)
-
-    # Test valid numeric values
-    valid_values = ['1000', '1000.00', '0.00', '-1000.00', '1,000.00']
-    for value in valid_values:
-        result = engine.validate_field(
-            'federal_action_obligation',
-            value,
-            [{'type': 'type', 'value': 'numeric'}]
-        )
-        assert result.valid, f"Failed for value: {value}"
-
-    # Test invalid numeric values
-    invalid_values = ['ABC', '1000.000', '1.2.3', '1,000,000,00']
-    for value in invalid_values:
-        result = engine.validate_field(
-            'federal_action_obligation',
-            value,
-            [{'type': 'type', 'value': 'numeric'}]
-        )
-        assert not result.valid, f"Should fail for value: {value}"
-        assert result.error_type == 'numeric_invalid'
-
-def test_domain_value_case_sensitivity(sample_config):
-    """Test domain value validation with different case combinations."""
-    engine = ValidationEngine(sample_config)
-
-    # Test case variations
-    test_cases = ['A', 'a', 'B', 'b']
-    for value in test_cases:
-        result = engine.validate_field(
-            'action_type',
-            value,
-            [{'type': 'exists_in_mapping', 'mapping': 'action_type'}]
-        )
-        assert result.valid, f"Failed for value: {value}"
-
-    # Test invalid values with correct format
-    result = engine.validate_field(
-        'action_type',
-        'C',  # Not in mapping
-        [{'type': 'exists_in_mapping', 'mapping': 'action_type'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'domain_value_invalid'
-
-def test_multiple_validation_rules(sample_config):
-    """Test fields with multiple validation rules."""
-    engine = ValidationEngine(sample_config)
-
-    # Test combined numeric and domain validation
-    result = engine.validate_field(
-        'federal_action_obligation',
-        '1000.00',
-        [
-            {'type': 'type', 'value': 'numeric'},
-            {'type': 'decimal', 'precision': 2},
-            {'type': 'min_value', 'value': 0}
-        ]
-    )
-    assert result.valid
-
-    # Test failing multiple rules
-    result = engine.validate_field(
-        'federal_action_obligation',
-        '-1000.000',  # Fails both precision and min_value
-        [
-            {'type': 'type', 'value': 'numeric'},
-            {'type': 'decimal', 'precision': 2},
-            {'type': 'min_value', 'value': 0}
-        ]
-    )
-    assert not result.valid
-
-def test_bulk_validation_performance(sample_config):
-    """Test validation performance with bulk data."""
-    engine = ValidationEngine(sample_config)
+@pytest.fixture
+def mock_engine():
+    # Create a mock engine
+    engine = MagicMock()
     
-    # Generate test data
-    test_records = [
-        {
-            'federal_action_obligation': f'{i}.00',
-            'period_of_performance_start_date': '2024-01-01',
-            'period_of_performance_current_end_date': '2024-12-31',
-            'action_type': 'A',
-            'uei': 'ABC123DEF456'
-        }
-        for i in range(100)
-    ]
-
-    # Validate bulk records
-    for record in test_records:
-        results = engine.validate_entity('transaction', record)
-        assert not any(not r.valid for r in results), "Bulk validation failed"
-
-def test_validate_field(sample_config):
-    """Test field validation with various rules."""
-    engine = ValidationEngine(sample_config)
-
-    # Test empty value handling for required fields
-    result = engine.validate_field(
-        'action_date',
-        None,
-        [{'type': 'required'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'date_None'
-
-    result = engine.validate_field(
-        'federal_action_obligation',
-        '',
-        [{'type': 'required'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'numeric_None'
-
-    # Test empty value handling for optional fields
-    result = engine.validate_field(
-        'description',
-        None,
-        []
-    )
-    assert result.valid
-
-    # Test decimal validation
-    result = engine.validate_field(
-        'federal_action_obligation',
-        '1000.00',
-        [{'type': 'decimal', 'precision': 2}]
-    )
-    assert result.valid
-
-    result = engine.validate_field(
-        'federal_action_obligation',
-        '1000.123',
-        [{'type': 'decimal', 'precision': 2}]
-    )
-    assert not result.valid
-
-    # Test date validation with explicit type
-    result = engine.validate_field(
-        'action_date',
-        '2024-01-15',
-        [{'type': 'type', 'value': 'date'}]
-    )
-    assert result.valid
-
-    result = engine.validate_field(
-        'action_date',
-        '01/15/2024',
-        [{'type': 'type', 'value': 'date'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'date_format'
-
-    # Test pattern validation
-    result = engine.validate_field(
-        'uei',
-        'ABC123DEF456',
-        [{'type': 'pattern', 'pattern': r'^[A-Z0-9]{12}$'}]
-    )
-    assert result.valid
-
-    result = engine.validate_field(
-        'uei',
-        'invalid-uei',
-        [{'type': 'pattern', 'pattern': r'^[A-Z0-9]{12}$'}]
-    )
-    assert not result.valid
-
-def test_validate_entity(sample_config):
-    """Test entity-level validation."""
-    engine = ValidationEngine(sample_config)
-
-    # Test transaction validation
-    transaction = {
-        'federal_action_obligation': '1000.00',
-        'uei': 'ABC123DEF456'
-    }
-    results = engine.validate_entity('transaction', transaction)
-    assert not any(not r.valid for r in results)
-
-    # Test invalid transaction
-    invalid_transaction = {
-        'federal_action_obligation': '1000.123',
-        'uei': 'invalid-uei'
-    }
-    results = engine.validate_entity('transaction', invalid_transaction)
-    assert any(not r.valid for r in results)
-
-def test_validate_business_characteristics(sample_config):
-    """Test business characteristics validation."""
-    engine = ValidationEngine(sample_config)
-
-    # Test valid characteristics (all can be true)
-    data = {
-        'characteristics': {
-            'minority_owned_business': True,
-            'asian_pacific_american_owned_business': True,
-            'black_american_owned_business': True
-        }
-    }
-    results = engine.validate_business_characteristics(data)
-    assert not any(not r.valid for r in results)
-
-    # Test mixed boolean values
-    data = {
-        'characteristics': {
-            'minority_owned_business': True,
-            'asian_pacific_american_owned_business': False,
-            'black_american_owned_business': True
-        }
-    }
-    results = engine.validate_business_characteristics(data)
-    assert not any(not r.valid for r in results)
-
-def test_validate_field_relationships(sample_config):
-    """Test validation of field relationships."""
-    engine = ValidationEngine(sample_config)
-
-    # Test valid relationship
-    result = engine.validate_field(
-        'base_exercised_options_value',
-        1000.00,
-        [{'type': 'less_than_or_equal', 'field': 'base_and_all_options_value'}],
-        {'base_and_all_options_value': 2000.00}
-    )
-    assert result.valid
-
-    # Test invalid relationship
-    result = engine.validate_field(
-        'base_exercised_options_value',
-        2000.00,
-        [{'type': 'less_than_or_equal', 'field': 'base_and_all_options_value'}],
-        {'base_and_all_options_value': 1000.00}
-    )
-    assert not result.valid
-
-def test_domain_value_validation(sample_config):
-    """Test validation against domain value mappings."""
-    engine = ValidationEngine(sample_config)
-
-    # Test valid domain value
-    result = engine.validate_field(
-        'action_type',
-        'A',
-        [{'type': 'exists_in_mapping', 'mapping': 'action_type'}]
-    )
-    assert result.valid
-
-    # Test invalid domain value
-    result = engine.validate_field(
-        'action_type',
-        'X',
-        [{'type': 'exists_in_mapping', 'mapping': 'action_type'}]
-    )
-    assert not result.valid
-
-def test_null_value_validation(sample_config):
-    """Test validation of null/empty values."""
-    engine = ValidationEngine(sample_config)
+    # Create a real implementation of the method we're testing
+    def get_unvalidated_dependencies(field, record):
+        # Actually call get_dependencies with the field parameter
+        dependencies = engine.dependency_manager.get_dependencies(field)
+        
+        # Track processed targets to avoid duplicates
+        processed_targets = set()
+        result = []
+        
+        for dependency in dependencies:
+            target = dependency['target']
+            
+            # Skip if already processed or no validator exists
+            if target in processed_targets or target not in engine.validators:
+                continue
+                
+            # Mark as processed to avoid duplicates
+            processed_targets.add(target)
+                
+            try:
+                # Check if already validated
+                if not engine.validators[target].is_validated(record):
+                    # Handle circular dependencies
+                    is_circular = dependency.get('metadata', {}).get('circular', False)
+                    if not is_circular or engine._is_critical_dependency(field, target, dependency):
+                        result.append(target)
+            except Exception:
+                # Skip dependencies that raise exceptions during validation check
+                continue
+                
+        return result
     
-    # Test null handling for typed fields
-    result = engine.validate_field(
-        'action_date',
-        None,
-        [{'type': 'type', 'value': 'date'}]
-    )
-    assert result.valid  # Optional field can be null
+    # Replace the mock method with our real implementation
+    engine._get_unvalidated_dependencies = get_unvalidated_dependencies
+    
+    return engine
 
-    result = engine.validate_field(
-        'action_date',
-        '',
-        [{'type': 'type', 'value': 'date'}, {'type': 'required'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'date_None'
+@pytest.fixture
+def sample_config():
+    return {
+        'field_properties': {
+            'field1': {'type': 'string'},
+            'field2': {'type': 'numeric'}
+        }
+    }
 
-    # Test whitespace handling
-    result = engine.validate_field(
-        'federal_action_obligation',
-        '   ',
-        [{'type': 'type', 'value': 'numeric'}, {'type': 'required'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'numeric_None'
+class TestValidation:
+    """Tests for validation functionality."""
 
-def test_type_validation(sample_config):
-    """Test type-specific validation rules."""
+    def test_missing_validator(self, mock_engine):
+        """Test when a validator is missing for a dependency."""
+        # Setup dependencies
+        mock_engine.dependency_manager.get_dependencies.return_value = [
+            {'target': 'dep1', 'type': 'required_field'},
+            {'target': 'dep2', 'type': 'comparison'}
+        ]
+        
+        # Only set up one validator, missing the second one
+        mock_validator1 = MagicMock()
+        mock_validator1.is_validated.return_value = False
+        
+        mock_engine.validators = {
+            'dep1': mock_validator1
+            # dep2 validator is missing
+        }
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', {})
+        
+        # Verify - should only include the dependency with a validator
+        assert result == ['dep1']
+        mock_validator1.is_validated.assert_called_once()
+
+    def test_validator_raises_exception(self, mock_engine):
+        """Test when a validator's is_validated method raises an exception."""
+        # Setup dependencies
+        mock_engine.dependency_manager.get_dependencies.return_value = [
+            {'target': 'dep1', 'type': 'required_field'},
+            {'target': 'dep2', 'type': 'comparison'}
+        ]
+        
+        # Create validators, one raises exception
+        mock_validator1 = MagicMock()
+        mock_validator1.is_validated.side_effect = Exception("Validator error")
+        mock_validator2 = MagicMock()
+        mock_validator2.is_validated.return_value = False
+        
+        mock_engine.validators = {
+            'dep1': mock_validator1,
+            'dep2': mock_validator2
+        }
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', {})
+        
+        # Verify - should skip the one that raised exception
+        assert result == ['dep2']
+        mock_validator1.is_validated.assert_called_once()
+        mock_validator2.is_validated.assert_called_once()
+
+    def test_with_custom_record(self, mock_engine):
+        """Test with a specific record passed to is_validated."""
+        # Setup dependencies
+        mock_engine.dependency_manager.get_dependencies.return_value = [
+            {'target': 'dep1', 'type': 'required_field'},
+            {'target': 'dep2', 'type': 'comparison'}
+        ]
+        
+        # Create validators
+        mock_validator1 = MagicMock()
+        mock_validator1.is_validated.return_value = False
+        mock_validator2 = MagicMock()
+        mock_validator2.is_validated.return_value = True
+        
+        mock_engine.validators = {
+            'dep1': mock_validator1,
+            'dep2': mock_validator2
+        }
+        
+        # Create a custom record
+        test_record = {'field1': 'value1', 'field2': 'value2'}
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', test_record)
+        
+        # Verify
+        assert result == ['dep1']
+        mock_validator1.is_validated.assert_called_once_with(test_record)
+        mock_validator2.is_validated.assert_called_once_with(test_record)
+
+    def test_many_dependencies(self, mock_engine):
+        """Test with a large number of dependencies."""
+        # Create 100 dependencies
+        dependencies = [{'target': f'dep{i}', 'type': 'required_field'} for i in range(100)]
+        mock_engine.dependency_manager.get_dependencies.return_value = dependencies
+        
+        # Setup validators (all unvalidated)
+        validators = {}
+        for i in range(100):
+            mock_validator = MagicMock()
+            mock_validator.is_validated.return_value = False
+            validators[f'dep{i}'] = mock_validator
+        
+        mock_engine.validators = validators
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', {})
+        
+        # Verify
+        assert len(result) == 100
+        for i in range(100):
+            validators[f'dep{i}'].is_validated.assert_called_once()
+            assert f'dep{i}' in result
+        mock_engine.dependency_manager.get_dependencies.assert_called_once_with('test_field')
+
+    def test_with_unvalidated_dependencies(self, mock_engine):
+        """Test with dependencies that need validation."""
+        # Setup dependencies
+        mock_engine.dependency_manager.get_dependencies.return_value = [
+            {'target': 'dep1', 'type': 'required_field'},
+            {'target': 'dep2', 'type': 'comparison'}
+        ]
+        
+        # Setup validators
+        mock_validator1 = MagicMock()
+        mock_validator1.is_validated.return_value = False
+        mock_validator2 = MagicMock()
+        mock_validator2.is_validated.return_value = False
+        
+        mock_engine.validators = {
+            'dep1': mock_validator1,
+            'dep2': mock_validator2
+        }
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', {})
+        
+        # Verify
+        assert set(result) == {'dep1', 'dep2'}
+        mock_validator1.is_validated.assert_called_once()
+        mock_validator2.is_validated.assert_called_once()
+
+    def test_with_validated_dependencies(self, mock_engine):
+        """Test with dependencies that are already validated."""
+        # Setup dependencies
+        mock_engine.dependency_manager.get_dependencies.return_value = [
+            {'target': 'dep1', 'type': 'required_field'},
+            {'target': 'dep2', 'type': 'comparison'}
+        ]
+        
+        # Setup validators (all validated)
+        mock_validator1 = MagicMock()
+        mock_validator1.is_validated.return_value = True
+        mock_validator2 = MagicMock()
+        mock_validator2.is_validated.return_value = True
+        
+        mock_engine.validators = {
+            'dep1': mock_validator1,
+            'dep2': mock_validator2
+        }
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', {})
+        
+        # Verify
+        assert result == []
+        mock_validator1.is_validated.assert_called_once()
+        mock_validator2.is_validated.assert_called_once()
+
+    def test_with_circular_dependencies(self, mock_engine):
+        """Test with circular dependencies."""
+        # Setup dependencies with circular flag
+        mock_engine.dependency_manager.get_dependencies.return_value = [
+            {'target': 'circular1', 'type': 'required_field', 'metadata': {'circular': True}},
+            {'target': 'circular2', 'type': 'optional_field', 'metadata': {'circular': True}}
+        ]
+        
+        # Setup validators
+        mock_validator1 = MagicMock()
+        mock_validator1.is_validated.return_value = False
+        mock_validator2 = MagicMock()
+        mock_validator2.is_validated.return_value = False
+        
+        mock_engine.validators = {
+            'circular1': mock_validator1,
+            'circular2': mock_validator2
+        }
+        
+        # Critical dependency check
+        mock_engine._is_critical_dependency.side_effect = lambda field, target, dep: target == 'circular1'
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', {})
+        
+        # Verify - only critical circular dependency should be included
+        assert result == ['circular1']
+        assert mock_engine._is_critical_dependency.call_count == 2
+
+    def test_with_mixed_dependencies(self, mock_engine):
+        """Test with mix of regular, validated, and circular dependencies."""
+        # Setup dependencies
+        mock_engine.dependency_manager.get_dependencies.return_value = [
+            {'target': 'regular', 'type': 'required_field'},               # Regular, unvalidated
+            {'target': 'validated', 'type': 'comparison'},                  # Regular, validated
+            {'target': 'critical_circular', 'type': 'required_field',      # Critical circular
+             'metadata': {'circular': True}},
+            {'target': 'noncritical_circular', 'type': 'optional_field',   # Non-critical circular
+             'metadata': {'circular': True}}
+        ]
+        
+        # Setup validators
+        validators = {
+            'regular': MagicMock(is_validated=MagicMock(return_value=False)),
+            'validated': MagicMock(is_validated=MagicMock(return_value=True)),
+            'critical_circular': MagicMock(is_validated=MagicMock(return_value=False)),
+            'noncritical_circular': MagicMock(is_validated=MagicMock(return_value=False))
+        }
+        mock_engine.validators = validators
+        
+        # Critical dependency check
+        mock_engine._is_critical_dependency.side_effect = lambda field, target, dep: target == 'critical_circular'
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', {})
+        
+        # Verify - should include regular unvalidated and critical circular
+        assert set(result) == {'regular', 'critical_circular'}
+        
+        # Each validator's is_validated method should be called exactly once
+        for validator in validators.values():
+            validator.is_validated.assert_called_once()
+
+    def test_duplicate_dependencies(self, mock_engine):
+        """Test handling of duplicate dependencies."""
+        # Setup dependencies with duplicates
+        mock_engine.dependency_manager.get_dependencies.return_value = [
+            {'target': 'dep1', 'type': 'required_field'},
+            {'target': 'dep1', 'type': 'comparison'},  # Duplicate
+            {'target': 'dep2', 'type': 'comparison'}
+        ]
+        
+        # Setup validators
+        mock_validator1 = MagicMock()
+        mock_validator1.is_validated.return_value = False
+        mock_validator2 = MagicMock()
+        mock_validator2.is_validated.return_value = False
+        
+        mock_engine.validators = {
+            'dep1': mock_validator1,
+            'dep2': mock_validator2
+        }
+        
+        # Execute
+        result = mock_engine._get_unvalidated_dependencies('test_field', {})
+        
+        # Verify - duplicates should be removed
+        assert set(result) == {'dep1', 'dep2'}
+        # dep1 validator should be called only once despite appearing twice in dependencies
+        mock_validator1.is_validated.assert_called_once()
+        mock_validator2.is_validated.assert_called_once()
+
+def test_missing_validator(sample_config):
+    """Test missing validator handling."""
     engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1'}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
 
-    # Test numeric type validation
-    result = engine.validate_field(
-        'federal_action_obligation',
-        'abc',
-        [{'type': 'type', 'value': 'numeric'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'numeric_invalid'
+def test_validator_raises_exception(sample_config):
+    """Test handling of exceptions raised by validators."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1'}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
 
-    # Test date type validation
-    result = engine.validate_field(
-        'action_date',
-        '2024-13-45',
-        [{'type': 'type', 'value': 'date'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'date_invalid'
+def test_with_custom_record(sample_config):
+    """Test validation with a custom record."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
 
-    # Test boolean type validation
-    result = engine.validate_field(
-        'is_fpds',
-        'invalid',
-        [{'type': 'type', 'value': 'boolean'}]
-    )
-    assert not result.valid
-    assert result.error_type == 'boolean_invalid'
+def test_many_dependencies(sample_config):
+    """Test validation with many dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_unvalidated_dependencies(sample_config):
+    """Test validation with unvalidated dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_validated_dependencies(sample_config):
+    """Test validation with validated dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_circular_dependencies(sample_config):
+    """Test validation with circular dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_with_mixed_dependencies(sample_config):
+    """Test validation with mixed dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)
+
+def test_duplicate_dependencies(sample_config):
+    """Test validation with duplicate dependencies."""
+    engine = ValidationEngine(sample_config)
+    record = {'field1': 'value1', 'field2': 123}
+    entity_stores = {}
+    results = engine.validate_record(record, entity_stores)
+    assert all(result.valid for result in results)

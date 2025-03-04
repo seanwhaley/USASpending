@@ -1,247 +1,222 @@
 """Entity data mapping and conversion functionality."""
-from typing import Dict, Any, Optional, List, Set
+from typing import Dict, Any, Optional, Union
 import logging
 from .utils import TypeConverter
+from .exceptions import EntityMappingError
+from .keys import CompositeKey
 
 logger = logging.getLogger(__name__)
 
 class EntityMapper:
-    """Handles entity data mapping and type conversion."""
-
+    """Maps source data to entity fields based on configuration."""
+    
     def __init__(self, config: Dict[str, Any], entity_type: str):
-        """Initialize entity mapper.
+        """
+        Initialize entity mapper.
         
         Args:
-            config: Configuration dictionary
-            entity_type: Type of entity being mapped
+            config: Configuration dictionary or instance
+            entity_type: Type of entity to map
         """
-        self.config = config
         self.entity_type = entity_type
-        self.entity_config = (config.get('contracts', {})
-                            .get('entity_separation', {})
-                            .get('entities', {})
-                            .get(entity_type, {}))
-        self.type_converter = TypeConverter(config)
+        self.config = config
+        self.field_mapping = self._get_field_mapping()
+    
+    def _get_field_mapping(self) -> Dict:
+        """Get field mapping for the entity type from config."""
+        entities_config = self.config.get("entities", {})
+        entity_config = entities_config.get(self.entity_type, {})
         
-    def _get_field_mappings(self, category: Optional[str] = None) -> Dict[str, Any]:
-        """Get field mappings from config for the current entity type.
+        if not entity_config or "field_mappings" not in entity_config:
+            raise EntityMappingError(f"No field mapping found for entity type: {self.entity_type}")
+        return entity_config["field_mappings"]
+    
+    def extract_entity_data(self, source_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Extract entity data from source data based on mappings."""
+        # Check for required key fields
+        entity_config = self.config.get("entities", {}).get(self.entity_type, {})
+        key_fields = entity_config.get("key_fields", [])
         
-        Args:
-            category: Optional category of fields to get (e.g. 'date_fields', 'value_fields')
-            
-        Returns:
-            Dictionary of field mappings
-        """
-        if not self.entity_config:
-            return {}
-            
-        mappings = self.entity_config.get("field_mappings", {})
+        # Skip records missing required key fields
+        for key_field in key_fields:
+            if key_field not in source_data or not source_data[key_field]:
+                return None
         
-        if category:
-            # For specific categories, look in the type_conversion section
-            type_mappings = self.config.get('type_conversion', {}).get(category, {})
-            return {k: v for k, v in mappings.items() if k in type_mappings}
-            
-        return mappings
-
-    def extract_entity_data(self, row_data: Dict[str, Any], stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract entity data from row data."""
-        if not isinstance(row_data, dict) or not row_data:
-            stats.setdefault("skipped", {}).setdefault("invalid_input", 0)
-            stats["skipped"]["invalid_input"] += 1
-            return None
-            
-        # Special case: Handle hierarchical agencies
-        if self.entity_type == "agency":
-            return self._extract_agency_data(row_data, stats)
-            
-        # Handle contracts
-        if self.entity_type == "contract":
-            return self._extract_contract_data(row_data, stats)
-            
-        # Handle transactions
-        if self.entity_type == "transaction":
-            return self._extract_transaction_data(row_data, stats)
-
-        # Standard entity extraction for other types
-        return self._extract_standard_entity_data(row_data, stats)
-
-    def _extract_agency_data(self, row_data: Dict[str, Any], stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract hierarchical agency data."""
-        if not row_data:
-            return None
-            
-        agency_data: Dict[str, Dict[str, Any]] = {}
-        agency_mappings = self._get_field_mappings()
+        result = {}
         
-        # Extract data for each agency level using config
-        if 'agency' in agency_mappings:
-            for role_mappings in agency_mappings['agency'].values():
-                for level, fields in role_mappings.items():
-                    code_field = fields.get('code')
-                    name_field = fields.get('name')
+        # Process different mapping categories
+        if "direct" in self.field_mapping:
+            self._map_direct_fields(source_data, result)
+        
+        if "multi_source" in self.field_mapping:
+            self._map_multi_source_fields(source_data, result)
+        
+        if "object" in self.field_mapping:
+            self._map_object_fields(source_data, result)
+        
+        if "reference" in self.field_mapping:
+            self._map_reference_fields(source_data, result)
+        
+        if "template" in self.field_mapping:
+            self._map_template_fields(source_data, result)
+        
+        return result
+    
+    def _map_direct_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
+        """Map fields with direct 1:1 mapping."""
+        for target_field, mapping in self.field_mapping["direct"].items():
+            source_field_name = mapping.get("field") if isinstance(mapping, dict) else mapping
+            
+            if source_field_name in source_data:
+                value = source_data[source_field_name]
+                
+                # Apply transformation if configured
+                if isinstance(mapping, dict) and "transformation" in mapping:
+                    try:
+                        # Create a type converter and apply the transformation
+                        converter = TypeConverter(self.config)
+                        transform_type = mapping["transformation"].get("type")
+                        if transform_type:
+                            value = converter.convert_value(value, transform_type)
+                            if value is None:
+                                # Skip if transformation failed
+                                continue
+                    except Exception as e:
+                        logger.warning(f"Transformation error for {target_field}: {str(e)}")
+                        continue
+                        
+                result[target_field] = value
+    
+    def _map_multi_source_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
+        """Map fields that combine multiple source fields."""
+        for target_field, mapping_config in self.field_mapping["multi_source"].items():
+            if "fields" not in mapping_config:
+                logger.warning(f"Invalid multi_source mapping for {target_field}")
+                continue
+                
+            source_values = []
+            for field in mapping_config["fields"]:
+                if field in source_data:
+                    source_values.append(source_data[field])
+            
+            if source_values:
+                if mapping_config.get("combine_function") == "concatenate":
+                    separator = " "  # Default separator
+                    result[target_field] = separator.join(str(v) for v in source_values if v is not None)
+    
+    def _map_object_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
+        """Map nested object fields."""
+        for target_field, mapping_config in self.field_mapping["object"].items():
+            if "fields" not in mapping_config:
+                continue
+            
+            # Create the nested object structure
+            if target_field not in result:
+                result[target_field] = {}
+                
+            nested_result = result[target_field]
+            
+            for prop_name, prop_mapping in mapping_config["fields"].items():
+                source_field = prop_mapping.get("field") if isinstance(prop_mapping, dict) else prop_mapping
+                
+                if source_field and source_field in source_data:
+                    value = source_data[source_field]
                     
-                    if isinstance(code_field, list):
-                        for field in code_field:
-                            if field in row_data and row_data[field]:
-                                level_data = {
-                                    'code': self._process_field_value(row_data[field], 'code'),
-                                    'name': None
-                                }
-                                
-                                # Try to find matching name field
-                                if isinstance(name_field, list):
-                                    name_idx = code_field.index(field)
-                                    if name_idx < len(name_field):
-                                        name_val = row_data.get(name_field[name_idx])
-                                        if name_val:
-                                            level_data['name'] = self._process_field_value(name_val, 'name')
-                                
-                                agency_data.setdefault(level, {}).update(level_data)
-
-        if not agency_data:
-            stats.setdefault("skipped", {}).setdefault("no_relevant_data", 0)
-            stats["skipped"]["no_relevant_data"] += 1
-            return None
-            
-        return agency_data
-
-    def _extract_contract_data(self, row_data: Dict[str, Any], stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract contract entity data."""
-        contract_data = {}
-        
-        # First ensure we have or can construct a unique key
-        if "contract_award_unique_key" in row_data:
-            contract_data["id"] = row_data["contract_award_unique_key"]
-            contract_data["piid"] = row_data.get("award_id_piid", "")
-        elif all(k in row_data for k in ["award_id_piid", "awarding_agency_code"]):
-            contract_data["id"] = f"CONT_AWD_{row_data['award_id_piid']}_{row_data['awarding_agency_code']}"
-            contract_data["piid"] = row_data["award_id_piid"]
-        else:
-            stats.setdefault("skipped", {}).setdefault("missing_key_fields", 0)
-            stats["skipped"]["missing_key_fields"] += 1
-            return None
-
-        # Map fields using config
-        for category in ['date_fields', 'value_fields']:
-            mappings = self._get_field_mappings(category)
-            for target, source in mappings.items():
-                if isinstance(source, (list, tuple)):
-                    for src in source:
-                        if src in row_data and row_data[src]:
-                            contract_data[target] = self._process_field_value(row_data[src], target)
-                            break
-                elif source in row_data and row_data[source]:
-                    contract_data[target] = self._process_field_value(row_data[source], target)
-
-        # Map remaining fields
-        for target_field, source_field in self._get_field_mappings().items():
-            if target_field not in contract_data:
-                source_fields = [source_field] if isinstance(source_field, str) else source_field
-                for src in source_fields:
-                    if src in row_data and row_data[src]:
-                        contract_data[target_field] = self._process_field_value(row_data[src], target_field)
-                        break
-
-        if contract_data:
-            return contract_data
-
-        stats.setdefault("skipped", {}).setdefault("no_relevant_data", 0)
-        stats["skipped"]["no_relevant_data"] += 1
-        return None
-
-    def _extract_transaction_data(self, row_data: Dict[str, Any], stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract transaction entity data."""
-        transaction_data = {}
-        
-        # Build transaction key
-        if "contract_transaction_unique_key" in row_data:
-            transaction_data["transaction_key"] = row_data["contract_transaction_unique_key"]
-        elif all(k in row_data for k in ["award_id_piid", "modification_number", "awarding_agency_code"]):
-            base_key = f"CONT_AWD_{row_data['award_id_piid']}_{row_data['awarding_agency_code']}"
-            transaction_data["transaction_key"] = f"{base_key}_MOD_{row_data['modification_number']}"
-        else:
-            stats.setdefault("skipped", {}).setdefault("missing_key_fields", 0)
-            stats["skipped"]["missing_key_fields"] += 1
-            return None
-
-        # Map fields using config
-        for category in ['date_fields', 'value_fields']:
-            mappings = self._get_field_mappings(category)
-            for target, source in mappings.items():
-                if isinstance(source, (list, tuple)):
-                    for src in source:
-                        if src in row_data and row_data[src]:
-                            transaction_data[target] = self._process_field_value(row_data[src], target)
-                            break
-                elif source in row_data and row_data[source]:
-                    transaction_data[target] = self._process_field_value(row_data[source], target)
-
-        # Map remaining fields
-        for target_field, source_field in self._get_field_mappings().items():
-            if target_field not in transaction_data:
-                source_fields = [source_field] if isinstance(source_field, str) else source_field
-                for src in source_fields:
-                    if src in row_data and row_data[src]:
-                        transaction_data[target_field] = self._process_field_value(row_data[src], target_field)
-                        break
-
-        if transaction_data:
-            return transaction_data
-
-        stats.setdefault("skipped", {}).setdefault("no_relevant_data", 0)
-        stats["skipped"]["no_relevant_data"] += 1
-        return None
-
-    def _extract_standard_entity_data(self, row_data: Dict[str, Any], stats: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract standard entity data."""
-        entity_result: Dict[str, Any] = {}
-        
-        # Apply field mappings from config
-        field_mappings = self._get_field_mappings()
-        for target_field, source_fields in field_mappings.items():
-            source_field_list = [source_fields] if isinstance(source_fields, str) else source_fields
-            
-            for source_field in source_field_list:
-                if source_field in row_data and row_data[source_field]:
-                    entity_result[target_field] = self._process_field_value(
-                        row_data[source_field],
-                        target_field
-                    )
-                    break
-
-        # Process entity references
-        if self.entity_config.get("entity_references"):
-            self._extract_entity_references(row_data, entity_result)
+                    # Apply transformation if configured
+                    if isinstance(prop_mapping, dict) and "transformation" in prop_mapping:
+                        try:
+                            converter = TypeConverter(self.config)
+                            transform_type = prop_mapping["transformation"].get("type")
+                            if transform_type:
+                                value = converter.convert_value(value, transform_type)
+                                if value is None:
+                                    # Skip just this field if transformation or validation failed
+                                    continue
+                        except Exception as e:
+                            logger.warning(f"Transformation error for {prop_name}: {str(e)}")
+                            continue
+                    
+                    nested_result[prop_name] = value
+    
+    def _map_reference_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
+        """Map fields that reference other entities."""
+        for target_field, mapping_config in self.field_mapping.get("reference", {}).items():
+            if "entity_type" not in mapping_config or "fields" not in mapping_config:
+                continue
                 
-        if not entity_result:
-            stats.setdefault("skipped", {}).setdefault("no_relevant_data", 0)
-            stats["skipped"]["no_relevant_data"] += 1
-            return None
-            
-        return entity_result
-                
-    def _extract_entity_references(self, row_data: Dict[str, Any], entity_result: Dict[str, Any]) -> None:
-        """Extract entity references."""
-        refs = self.entity_config.get("entity_references", {})
-        
-        for ref_type, ref_config in refs.items():
             ref_data = {}
+            for field_name, field_config in mapping_config["fields"].items():
+                source_field = field_config.get("field")
+                if source_field and source_field in source_data:
+                    value = source_data[source_field]
+                    # Apply any transformations if configured
+                    if isinstance(field_config, dict) and "transformation" in field_config:
+                        try:
+                            converter = TypeConverter(self.config)
+                            transform_type = field_config["transformation"].get("type")
+                            if transform_type:
+                                value = converter.convert_value(value, transform_type)
+                                if value is None:
+                                    continue
+                        except Exception as e:
+                            logger.warning(f"Transformation error for {field_name}: {str(e)}")
+                            continue
+                    ref_data[field_name] = value
             
-            # Extract all specified fields with their processors
-            for field in ref_config["fields"]:
-                if field in row_data and row_data[field]:
-                    value = row_data[field]
-                    if "field_processors" in ref_config:
-                        processor = ref_config["field_processors"].get(field)
-                        if processor:
-                            value = self._process_field_value(value, field)
-                    ref_data[field] = value
-                    
-            # Add reference if any data was found
             if ref_data:
-                entity_result[ref_type] = ref_data
+                result[target_field] = {
+                    "type": mapping_config["entity_type"],
+                    "data": ref_data
+                }
+    
+    def _map_template_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
+        """Map fields using template strings."""
+        for target_field, mapping_config in self.field_mapping["template"].items():
+            if "template" not in mapping_config or "fields" not in mapping_config:
+                continue
                 
-    def _process_field_value(self, value: Any, field_name: str) -> Any:
-        """Process field value with type conversion."""
-        return self.type_converter.convert_value(value, field_name)
+            template = mapping_config["template"]
+            # Create a dictionary of field values for template formatting
+            template_values = {}
+            for key, source_field in mapping_config["fields"].items():
+                if source_field in source_data:
+                    template_values[key] = source_data[source_field]
+                else:
+                    template_values[key] = ""
+                    
+            # Apply template
+            try:
+                result[target_field] = template.format(**template_values)
+            except (KeyError, ValueError) as e:
+                logger.warning(f"Template formatting error for {target_field}: {str(e)}")
+    
+    def build_key(self, entity_data: Dict[str, Any]) -> Optional[Union[str, Dict[str, str], CompositeKey]]:
+        """Build entity key from data."""
+        entity_config = self.config.get("entities", {}).get(self.entity_type, {})
+        key_fields = entity_config.get("key_fields", [])
+        
+        if not key_fields:
+            return None
+            
+        if isinstance(key_fields, str):
+            # Single field key
+            if key_fields not in entity_data:
+                return None
+            return str(entity_data[key_fields])
+            
+        elif isinstance(key_fields, list):
+            # Composite key
+            key_parts = {}
+            for field in key_fields:
+                if field not in entity_data:
+                    return None
+                key_parts[field] = str(entity_data[field])
+            return CompositeKey(key_parts)
+            
+        return None
+
+    def transform_money(self, value: str, config: dict) -> float:
+        """Transform money values by stripping characters and converting to float."""
+        if isinstance(value, str):
+            return float(value.strip(config.get('strip_characters', '$,')))
+        return value

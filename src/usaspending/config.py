@@ -1,165 +1,245 @@
-"""Configuration handling module."""
-import logging
-import sys
+"""Configuration management for data processing and validation."""
+
 import os
-from pathlib import Path
-from typing import Dict, List, Any, Optional, Literal
 import yaml
-from dotenv import load_dotenv
-import copy
+import json
+import jsonschema
+from typing import Any, Dict, Optional
 
-from .types import ConfigType, ValidationRule
-from .config_validator import validate_config_structure, ConfigValidationError, get_schema_description
+from src.usaspending.logging_config import get_logger
+from src.usaspending.config_schema import ROOT_CONFIG_SCHEMA
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-def setup_logging(output_file: Optional[str] = None, debug_file: Optional[str] = None) -> logging.Logger:
-    """Setup logging configuration."""
-    logger = logging.getLogger('usaspending')
-    log_level = os.getenv('LOG_LEVEL', 'INFO')
-    logger.setLevel(getattr(logging, log_level))
+class ConfigManager:
+    """Manages configuration loading and validation."""
     
-    # Console handler
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.INFO)
-    console.setFormatter(logging.Formatter('%(levelname)s - %(message)s'))
-    logger.addHandler(console)
-    
-    # File handlers
-    if output_file:
-        file_handler = logging.FileHandler(output_file)
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logger.addHandler(file_handler)
-    
-    if debug_file:
-        debug_handler = logging.FileHandler(debug_file)
-        debug_handler.setLevel(logging.DEBUG)
-        debug_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(levelname)s - %(module)s:%(lineno)d - %(funcName)s - %(message)s'
-        ))
-        logger.addHandler(debug_handler)
-    
-    return logger
-
-def load_config(config_file: str = '../conversion_config.yaml',
-                section: Optional[Literal['contracts', 'data_dictionary']] = None) -> ConfigType:
-    """Load and validate configuration from YAML file and environment variables."""
-    try:
-        with open(config_file, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-
-        if not isinstance(config, dict):
-            raise ValueError("Configuration must be a dictionary")
+    def __init__(self, config_path: Optional[str] = None):
+        """Initialize configuration manager."""
+        self.config_path = config_path
+        self.config: Dict[str, Any] = {}
+        
+    def load(self, config_path: Optional[str] = None) -> None:
+        """Load configuration from YAML file.
+        
+        Args:
+            config_path: Optional override path to config file
+        """
+        if config_path:
+            self.config_path = config_path
             
-        # Apply environment variable overrides
-        config = _apply_env_overrides(config)
+        if not self.config_path:
+            raise ValueError("No configuration path specified")
             
-        # Validate configuration structure against TypedDict definitions
+        if not os.path.exists(self.config_path):
+            raise FileNotFoundError(f"Configuration file not found: {self.config_path}")
+            
         try:
-            validate_config_structure(config)
-        except ConfigValidationError as e:
-            # Optional: print schema to help with debugging
-            print("Expected configuration schema:")
-            import json
-            print(json.dumps(get_schema_description(ConfigType), indent=2))
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                self.config = yaml.safe_load(f)
+            logger.info(f"Loaded configuration from {self.config_path}")
+            self.validate()
+        except Exception as e:
+            logger.error(f"Failed to load configuration: {str(e)}")
             raise
             
-        # Return specific section if requested
-        if section:
-            if section not in config:
-                raise ValueError(f"Section '{section}' not found in configuration")
-            return config[section]
+    def validate(self) -> None:
+        """Validate loaded configuration against schema."""
+        try:
+            jsonschema.validate(self.config, ROOT_CONFIG_SCHEMA)
+            logger.info("Configuration validation successful")
+        except jsonschema.exceptions.ValidationError as e:
+            logger.error(f"Invalid configuration: {str(e)}")
+            raise
+            
+    def get(self, *keys: str, default: Any = None) -> Any:
+        """Get nested configuration value using dot notation."""
+        result = self.config
+        for key in keys:
+            if isinstance(result, dict):
+                result = result.get(key, default)
+            else:
+                return default
+        return result
         
-        return config
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Configuration file not found: {config_file}")
-    except yaml.YAMLError as e:
-        raise ValueError(f"Invalid YAML in configuration file: {e}")
+    def get_entity_config(self, entity_name: str) -> Dict[str, Any]:
+        """Get configuration for a specific entity.
+        
+        Args:
+            entity_name: Name of entity to get configuration for
+            
+        Returns:
+            Entity configuration dictionary
+        """
+        if not self.config:
+            raise ValueError("Configuration not loaded")
+            
+        entities = self.config.get('entities', {})
+        if entity_name not in entities:
+            raise KeyError(f"No configuration found for entity: {entity_name}")
+            
+        return entities[entity_name]
+        
+    def get_field_properties(self, field_name: str) -> Dict[str, Any]:
+        """Get properties for a specific field.
+        
+        Args:
+            field_name: Name of field to get properties for
+            
+        Returns:
+            Field properties dictionary
+        """
+        if not self.config:
+            raise ValueError("Configuration not loaded")
+            
+        properties = self.config.get('field_properties', {})
+        
+        # Check for exact match first
+        for category in properties.values():
+            for field_type, config in category.items():
+                if field_name in config.get('fields', []):
+                    return config
+                    
+        # Then check patterns
+        for category in properties.values():
+            for field_type, config in category.items():
+                for pattern in config.get('fields', []):
+                    if '*' in pattern:
+                        import fnmatch
+                        if fnmatch.fnmatch(field_name, pattern):
+                            return config
+                            
+        return {}
 
-def _apply_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply environment variable overrides to configuration."""
-    env_mappings = config.get('_environment_mappings', {})
-    
-    def apply_mapping(config_dict: Dict[str, Any], mappings: Dict[str, Any], prefix: str = "") -> None:
-        for key, value in mappings.items():
-            if isinstance(value, dict):
-                if key not in config_dict:
-                    config_dict[key] = {}
-                apply_mapping(config_dict[key], value, f"{prefix}{key}_")
-            else:
-                env_key = f"{prefix}{key}".upper()
-                env_value = os.getenv(env_key)
-                if env_value is not None:
-                    if value == 'bool':
-                        config_dict[key] = _get_env_bool(env_key)
-                    elif value == 'int':
-                        config_dict[key] = _get_env_int(env_key)
-                    else:
-                        config_dict[key] = env_value
-    
-    apply_mapping(config, env_mappings)
-    return config
+    def get_config(self) -> Dict[str, Any]:
+        """Get the complete configuration.
+        
+        Returns:
+            The complete configuration dictionary
+        """
+        if not self.config:
+            raise ValueError("Configuration not loaded")
+        return self.config
 
-def _get_env_bool(key: str, default: bool = False) -> bool:
-    """Convert environment variable to boolean."""
-    value = os.getenv(key, str(default)).lower()
-    return value in ('true', '1', 't', 'yes', 'y')
+import logging
+import copy
+import msvcrt  # For Windows
+from pathlib import Path
+from typing import TypeVar, Type
+from dataclasses import dataclass
+from datetime import datetime
 
-def _get_env_int(key: str, default: int = 0) -> int:
-    """Convert environment variable to integer."""
+# Only import fcntl on Unix systems
+if os.name != 'nt':
+    import fcntl
+
+from .exceptions import ConfigurationError
+from .types import ValidationResult
+
+T = TypeVar('T')
+
+def atomic_file_operation(file_path: Path, operation: callable):
+    """Execute file operation with proper locking."""
     try:
-        return int(os.getenv(key, str(default)))
-    except ValueError:
-        return default
+        with open(file_path, 'r+' if os.path.exists(file_path) else 'w+') as f:
+            if os.name == 'nt':  # Windows
+                try:
+                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError as e:
+                    # Handle case where file is already locked
+                    logger.error(f"File is locked: {e}")
+                    raise ConfigurationError(f"File is locked: {e}") from e
+            elif 'fcntl' in globals():  # Unix
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            try:
+                return operation(f)
+            finally:
+                if os.name == 'nt':
+                    try:
+                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        pass  # Ignore errors during unlock
+                elif 'fcntl' in globals():
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
-def _merge_default_schemas(config: Dict[str, Any]) -> Dict[str, Any]:
-    """Ensure configuration has all required default values."""
-    result = copy.deepcopy(DEFAULT_VALIDATION_SCHEMA)
-    
-    # Recursively merge config into defaults
-    def deep_merge(target, source):
-        for key, value in source.items():
-            if key in target and isinstance(target[key], dict) and isinstance(value, dict):
-                deep_merge(target[key], value)
+    except IOError as e:
+        logger.error(f"File operation failed: {e}")
+        raise ConfigurationError(f"File operation failed: {e}") from e
+
+@dataclass
+class CachedValidation:
+    """Represents a cached validation result."""
+    timestamp: datetime
+    result: ValidationResult
+
+    def get(self, *keys: str, default: Any = None) -> Any:
+        """Get nested configuration value using dot notation."""
+        result = self.config
+        for key in keys:
+            if isinstance(result, dict):
+                result = result.get(key, default)
             else:
-                target[key] = value
-    
-    deep_merge(result, config)
-    return result
+                return default
+        return result
 
-# Add a configuration schema definition
-DEFAULT_VALIDATION_SCHEMA = {
-    "validation_types": {
-        "numeric": {
-            "decimal": {
-                "strip_characters": "$,.",
-                "precision": 2
-            }
-        },
-        "date": {
-            "standard": {
-                "format": "%Y-%m-%d"
-            }
-        },
-        "string": {
-            "pattern": {}
-        }
-    },
-    "validation": {
-        "errors": {
-            "numeric": {
-                "invalid": "Invalid numeric value for {field}",
-                "rule_violation": "Invalid numeric value for {field} based on rule {rule}"
-            },
-            "date": {
-                "invalid": "Invalid date value for {field}",
-                "rule_violation": "Invalid date value for {field} based on rule {rule}"
-            },
-            "general": {
-                "rule_violation": "Validation failed for {field} based on rule {rule}"
-            }
-        },
-        "empty_values": ["", "None", "null", "na", "n/a"]
-    }
-}
+    def reload(self) -> None:
+        """Reload configuration from file."""
+        logger.debug("Reloading configuration from file")
+        self.config = self._load_config(self.config_path)
+        self._validate_config()
+
+    def get_typed(self, *keys: str, type_: Type[T], default: T = None) -> T:
+        """Get configuration value with type coercion."""
+        value = self.get(*keys, default=default)
+        if value is None:
+            return default
+        try:
+            return type_(value)
+        except (ValueError, TypeError) as e:
+            logger.error(f"Failed to convert configuration value at {'.'.join(keys)} to {type_.__name__}: {str(e)}")
+            raise ConfigurationError(
+                f"Failed to convert configuration value at {'.'.join(keys)} to {type_.__name__}: {str(e)}"
+            )
+
+    def get_config(self) -> Dict[str, Any]:
+        """Get the complete configuration.
+        
+        Returns:
+            The complete configuration dictionary
+        """
+        return self.config
+
+# Function for processor.py to use
+def convert_csv_to_json(config_manager: ConfigManager) -> bool:
+    try:
+        # Access the configuration using the get_config method
+        config_data = config_manager.get_config()
+        
+        # Ensure input and output paths are correct
+        input_file = Path(config_data['system']['io']['input']['file'])
+        output_dir = Path(config_data['system']['io']['output']['directory'])
+
+        if not input_file.exists():
+            logger.error(f"Input file does not exist: {input_file}")
+            return False
+
+        # Perform the conversion (dummy implementation for illustration)
+        output_file = output_dir / (input_file.stem + '.json')
+        with input_file.open('r', encoding='utf-8') as csv_file:
+            csv_data = csv_file.read()
+            # Dummy conversion logic
+            json_data = {"data": csv_data}
+            with output_file.open('w', encoding='utf-8') as json_file:
+                json.dump(json_data, json_file)
+
+        logger.info(f"Conversion successful: {output_file}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Conversion failed: {str(e)}")
+        logger.debug("Stack trace:", exc_info=True)
+        return False
+
+# ConfigManager singleton provides all needed functionality
+__all__ = ['ConfigManager', 'convert_csv_to_json']

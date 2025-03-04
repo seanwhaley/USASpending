@@ -1,23 +1,11 @@
 # Core dependencies
-pandas
-numpy
-pyyaml
-typing-extensions
-python-dateutil
-python-dotenv==1.0.0
+pandas>=2.0.0
+numpy>=1.24.0
+pyyaml>=6.0.1,<7.0.0
+typing-extensions>=4.8.0
+python-dateutil>=2.9.0
+pydantic>=2.5.0
+marshmallow>=3.20.0
 
-# Development and testing
-pytest
-pytest-cov
-flake8
-mypy
-black
-isort
-
-# Documentation
-sphinx
-sphinx-rtd-theme
-
-# Development tools
-ipython
-jupyter
+# Schema validation
+jsonschema>=4.20.0

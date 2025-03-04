@@ -1,19 +1,27 @@
 [build-system]
-requires = ["setuptools>=45", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "usaspending"
 version = "0.1.0"
-description = "USA Spending data processing tools"
+authors = [
+    { name = "USASpending Team" }
+]
+description = "USASpending data processing tools"
+requires-python = ">=3.9"
+dynamic = ["dependencies", "optional-dependencies"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+optional-dependencies = {dev = {file = ["requirements-dev.txt"]}}
 
 [tool.pytest.ini_options]
-pythonpath = [
-    "src"
-]
-testpaths = [
-    "tests",
-]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=usaspending"
 
 [tool.mypy]
 python_version = "3.9"

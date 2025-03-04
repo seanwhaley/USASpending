@@ -1,62 +1,53 @@
-"""Test configuration functionality."""
 import pytest
-from pathlib import Path
-import yaml
-from usaspending.config import load_config, validate_contracts_config
+from usaspending.config import ConfigManager, ConfigurationError
 
-def test_validate_contracts_config(sample_config):
-    """Test that a valid configuration passes validation."""
-    assert validate_contracts_config(sample_config) is True
+def test_load_config():
+    """Test loading and validating the configuration."""
+    config_path = "d:/VS Code Projects/USASpending/conversion_config.yaml"
+    config_manager = ConfigManager(config_path)
+    
+    config = config_manager.get_config()
+    
+    assert 'entities' in config
+    for entity_name, entity_config in config['entities'].items():
+        assert 'key_fields' in entity_config
+        assert isinstance(entity_config['key_fields'], list)
 
-def test_invalid_config_missing_section():
-    """Test that missing sections raise appropriate errors."""
+def test_missing_key_fields():
+    """Test configuration with missing key_fields."""
     invalid_config = {
-        "contracts": {
-            "output": {},  # Missing required sections
-        }
-    }
-    with pytest.raises(ValueError, match="Missing required section 'contracts.input'"):
-        validate_contracts_config(invalid_config)
-
-def test_invalid_config_wrong_type():
-    """Test that wrong types raise appropriate errors."""
-    invalid_config = {
-        "contracts": {
-            "input": {
-                "file": "test.csv",
-                "batch_size": "1000"  # Should be int, not str
-            },
-            "output": {
-                "main_file": "out.json",
-                "indent": 2,
-                "ensure_ascii": False
-            },
-            "chunking": {
+        "entities": {
+            "test_entity": {
                 "enabled": True,
-                "records_per_chunk": 1000,
-                "create_index": True
-            },
-            "type_conversion": {
-                "date_fields": [],
-                "numeric_fields": [],
-                "boolean_true_values": [],
-                "boolean_false_values": []
+                "field_mappings": {
+                    "direct": {
+                        "id_field": {"field": "source_id"},
+                        "name": {"field": "source_name"}
+                    }
+                }
             }
         }
     }
-    with pytest.raises(ValueError, match="batch_size must be an integer"):
-        validate_contracts_config(invalid_config)
-
-def test_load_config_file_not_found():
-    """Test that non-existent config file raises appropriate error."""
-    with pytest.raises(FileNotFoundError):
-        load_config("nonexistent.yaml")
-
-def test_load_config_success(tmp_path: Path, sample_config):
-    """Test successful config loading from file."""
-    config_file = tmp_path / "test_config.yaml"
-    with open(config_file, 'w') as f:
-        yaml.dump(sample_config, f)
     
-    loaded_config = load_config(str(config_file))
-    assert loaded_config == sample_config
+    with pytest.raises(ConfigurationError, match="Invalid configuration: 'key_fields' is a required property for entity 'test_entity'"):
+        ConfigManager(invalid_config)
+
+def test_invalid_key_fields_type():
+    """Test configuration with invalid key_fields type."""
+    invalid_config = {
+        "entities": {
+            "test_entity": {
+                "enabled": True,
+                "key_fields": "id_field",  # Should be a list
+                "field_mappings": {
+                    "direct": {
+                        "id_field": {"field": "source_id"},
+                        "name": {"field": "source_name"}
+                    }
+                }
+            }
+        }
+    }
+    
+    with pytest.raises(ConfigurationError, match="Invalid configuration: 'key_fields' must be a list for entity 'test_entity'"):
+        ConfigManager(invalid_config)
