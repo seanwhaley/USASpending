@@ -1,222 +1,159 @@
-"""Entity data mapping and conversion functionality."""
-from typing import Dict, Any, Optional, Union
-import logging
-from .utils import TypeConverter
+"""Entity mapping functionality."""
+from typing import Dict, Any, Optional, List, Set
+from .validation_base import BaseValidator
+from .text_file_cache import TextFileCache
 from .exceptions import EntityMappingError
-from .keys import CompositeKey
+from .logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-class EntityMapper:
-    """Maps source data to entity fields based on configuration."""
+class EntityMapper(BaseValidator):
+    """Maps data between different entity formats."""
     
-    def __init__(self, config: Dict[str, Any], entity_type: str):
-        """
-        Initialize entity mapper.
+    def __init__(self, adapter_config: Dict[str, Any]):
+        """Initialize entity mapper.
         
         Args:
-            config: Configuration dictionary or instance
-            entity_type: Type of entity to map
+            adapter_config: Configuration for field adapters
         """
-        self.entity_type = entity_type
-        self.config = config
-        self.field_mapping = self._get_field_mapping()
-    
-    def _get_field_mapping(self) -> Dict:
-        """Get field mapping for the entity type from config."""
-        entities_config = self.config.get("entities", {})
-        entity_config = entities_config.get(self.entity_type, {})
+        super().__init__()
+        self._adapter_config = adapter_config
+        self._mapping_cache: Dict[str, Dict[str, Any]] = {}
+        self._file_cache = TextFileCache()
+        self._mapped_fields: Set[str] = set()
+        self._initialize_adapters()
         
-        if not entity_config or "field_mappings" not in entity_config:
-            raise EntityMappingError(f"No field mapping found for entity type: {self.entity_type}")
-        return entity_config["field_mappings"]
-    
-    def extract_entity_data(self, source_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract entity data from source data based on mappings."""
-        # Check for required key fields
-        entity_config = self.config.get("entities", {}).get(self.entity_type, {})
-        key_fields = entity_config.get("key_fields", [])
-        
-        # Skip records missing required key fields
-        for key_field in key_fields:
-            if key_field not in source_data or not source_data[key_field]:
-                return None
-        
-        result = {}
-        
-        # Process different mapping categories
-        if "direct" in self.field_mapping:
-            self._map_direct_fields(source_data, result)
-        
-        if "multi_source" in self.field_mapping:
-            self._map_multi_source_fields(source_data, result)
-        
-        if "object" in self.field_mapping:
-            self._map_object_fields(source_data, result)
-        
-        if "reference" in self.field_mapping:
-            self._map_reference_fields(source_data, result)
-        
-        if "template" in self.field_mapping:
-            self._map_template_fields(source_data, result)
-        
-        return result
-    
-    def _map_direct_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map fields with direct 1:1 mapping."""
-        for target_field, mapping in self.field_mapping["direct"].items():
-            source_field_name = mapping.get("field") if isinstance(mapping, dict) else mapping
-            
-            if source_field_name in source_data:
-                value = source_data[source_field_name]
-                
-                # Apply transformation if configured
-                if isinstance(mapping, dict) and "transformation" in mapping:
-                    try:
-                        # Create a type converter and apply the transformation
-                        converter = TypeConverter(self.config)
-                        transform_type = mapping["transformation"].get("type")
-                        if transform_type:
-                            value = converter.convert_value(value, transform_type)
-                            if value is None:
-                                # Skip if transformation failed
-                                continue
-                    except Exception as e:
-                        logger.warning(f"Transformation error for {target_field}: {str(e)}")
-                        continue
-                        
-                result[target_field] = value
-    
-    def _map_multi_source_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map fields that combine multiple source fields."""
-        for target_field, mapping_config in self.field_mapping["multi_source"].items():
-            if "fields" not in mapping_config:
-                logger.warning(f"Invalid multi_source mapping for {target_field}")
+    def _initialize_adapters(self) -> None:
+        """Initialize field adapters from configuration."""
+        for field_pattern, adapter_config in self._adapter_config.items():
+            adapter_type = adapter_config.get('type')
+            if not adapter_type:
+                logger.warning(f"No adapter type specified for {field_pattern}")
                 continue
                 
-            source_values = []
-            for field in mapping_config["fields"]:
-                if field in source_data:
-                    source_values.append(source_data[field])
-            
-            if source_values:
-                if mapping_config.get("combine_function") == "concatenate":
-                    separator = " "  # Default separator
-                    result[target_field] = separator.join(str(v) for v in source_values if v is not None)
-    
-    def _map_object_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map nested object fields."""
-        for target_field, mapping_config in self.field_mapping["object"].items():
-            if "fields" not in mapping_config:
-                continue
-            
-            # Create the nested object structure
-            if target_field not in result:
-                result[target_field] = {}
-                
-            nested_result = result[target_field]
-            
-            for prop_name, prop_mapping in mapping_config["fields"].items():
-                source_field = prop_mapping.get("field") if isinstance(prop_mapping, dict) else prop_mapping
-                
-                if source_field and source_field in source_data:
-                    value = source_data[source_field]
-                    
-                    # Apply transformation if configured
-                    if isinstance(prop_mapping, dict) and "transformation" in prop_mapping:
-                        try:
-                            converter = TypeConverter(self.config)
-                            transform_type = prop_mapping["transformation"].get("type")
-                            if transform_type:
-                                value = converter.convert_value(value, transform_type)
-                                if value is None:
-                                    # Skip just this field if transformation or validation failed
-                                    continue
-                        except Exception as e:
-                            logger.warning(f"Transformation error for {prop_name}: {str(e)}")
-                            continue
-                    
-                    nested_result[prop_name] = value
-    
-    def _map_reference_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map fields that reference other entities."""
-        for target_field, mapping_config in self.field_mapping.get("reference", {}).items():
-            if "entity_type" not in mapping_config or "fields" not in mapping_config:
-                continue
-                
-            ref_data = {}
-            for field_name, field_config in mapping_config["fields"].items():
-                source_field = field_config.get("field")
-                if source_field and source_field in source_data:
-                    value = source_data[source_field]
-                    # Apply any transformations if configured
-                    if isinstance(field_config, dict) and "transformation" in field_config:
-                        try:
-                            converter = TypeConverter(self.config)
-                            transform_type = field_config["transformation"].get("type")
-                            if transform_type:
-                                value = converter.convert_value(value, transform_type)
-                                if value is None:
-                                    continue
-                        except Exception as e:
-                            logger.warning(f"Transformation error for {field_name}: {str(e)}")
-                            continue
-                    ref_data[field_name] = value
-            
-            if ref_data:
-                result[target_field] = {
-                    "type": mapping_config["entity_type"],
-                    "data": ref_data
-                }
-    
-    def _map_template_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map fields using template strings."""
-        for target_field, mapping_config in self.field_mapping["template"].items():
-            if "template" not in mapping_config or "fields" not in mapping_config:
-                continue
-                
-            template = mapping_config["template"]
-            # Create a dictionary of field values for template formatting
-            template_values = {}
-            for key, source_field in mapping_config["fields"].items():
-                if source_field in source_data:
-                    template_values[key] = source_data[source_field]
-                else:
-                    template_values[key] = ""
-                    
-            # Apply template
             try:
-                result[target_field] = template.format(**template_values)
-            except (KeyError, ValueError) as e:
-                logger.warning(f"Template formatting error for {target_field}: {str(e)}")
-    
-    def build_key(self, entity_data: Dict[str, Any]) -> Optional[Union[str, Dict[str, str], CompositeKey]]:
-        """Build entity key from data."""
-        entity_config = self.config.get("entities", {}).get(self.entity_type, {})
-        key_fields = entity_config.get("key_fields", [])
+                adapter = self._create_adapter(adapter_type, adapter_config)
+                if adapter:
+                    self.register_adapter(field_pattern, adapter)
+            except Exception as e:
+                logger.error(f"Failed to create adapter for {field_pattern}: {str(e)}")
+                
+    def _create_adapter(self, adapter_type: str, config: Dict[str, Any]) -> Any:
+        """Create field adapter instance.
         
-        if not key_fields:
+        Args:
+            adapter_type: Type of adapter to create
+            config: Adapter configuration
+            
+        Returns:
+            Adapter instance
+        """
+        from .schema_adapters import SchemaAdapterFactory
+        try:
+            return SchemaAdapterFactory.create_adapter(adapter_type, config)
+        except Exception as e:
+            logger.error(f"Failed to create {adapter_type} adapter: {str(e)}")
             return None
             
-        if isinstance(key_fields, str):
-            # Single field key
-            if key_fields not in entity_data:
-                return None
-            return str(entity_data[key_fields])
+    def map_entity(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Map data to entity format.
+        
+        Args:
+            data: Data to map
             
-        elif isinstance(key_fields, list):
-            # Composite key
-            key_parts = {}
-            for field in key_fields:
-                if field not in entity_data:
-                    return None
-                key_parts[field] = str(entity_data[field])
-            return CompositeKey(key_parts)
+        Returns:
+            Mapped entity data
+        """
+        result = {}
+        self.errors.clear()
+        
+        try:
+            # Apply field mappings
+            for field_name, value in data.items():
+                if self.validate_field(field_name, value):
+                    mapped_value = self._apply_mapping(field_name, value)
+                    if mapped_value is not None:
+                        result[field_name] = mapped_value
+                        self._mapped_fields.add(field_name)
+                        
+            return result
             
-        return None
-
-    def transform_money(self, value: str, config: dict) -> float:
-        """Transform money values by stripping characters and converting to float."""
-        if isinstance(value, str):
-            return float(value.strip(config.get('strip_characters', '$,')))
-        return value
+        except Exception as e:
+            logger.error(f"Entity mapping failed: {str(e)}")
+            raise EntityMappingError(f"Failed to map entity: {str(e)}")
+            
+    def _validate_field_value(self, field_name: str, value: Any,
+                          validation_context: Optional[Dict[str, Any]] = None) -> bool:
+        """Validate field value using registered adapter.
+        
+        Args:
+            field_name: Field name to validate
+            value: Value to validate
+            validation_context: Optional validation context
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        adapter = self._get_adapter(field_name)
+        if not adapter:
+            return True  # No adapter means valid
+            
+        try:
+            if not adapter.validate(value, {}, validation_context):
+                self.errors.extend(adapter.get_errors())
+                return False
+            return True
+            
+        except Exception as e:
+            logger.error(f"Validation error for {field_name}: {str(e)}")
+            self.errors.append(f"Field validation failed: {str(e)}")
+            return False
+            
+    def _apply_mapping(self, field_name: str, value: Any) -> Any:
+        """Apply field mapping transformation.
+        
+        Args:
+            field_name: Name of field to map
+            value: Value to transform
+            
+        Returns:
+            Transformed value
+        """
+        adapter = self._get_adapter(field_name)
+        if not adapter:
+            return value  # Pass through if no adapter
+            
+        try:
+            return adapter.transform(value)
+        except Exception as e:
+            logger.error(f"Mapping failed for {field_name}: {str(e)}")
+            self.errors.append(f"Field mapping failed: {str(e)}")
+            return None
+            
+    def get_mapping_errors(self) -> List[str]:
+        """Get mapping error messages.
+        
+        Returns:
+            List of error messages
+        """
+        return self.get_validation_errors()
+        
+    def get_mapping_stats(self) -> Dict[str, Any]:
+        """Get mapping statistics.
+        
+        Returns:
+            Dictionary of mapping statistics
+        """
+        stats = self.get_validation_stats()
+        stats.update({
+            'mapped_fields': len(self._mapped_fields),
+            'adapter_count': len(self._adapters)
+        })
+        return stats
+        
+    def clear_caches(self) -> None:
+        """Clear all mapping caches."""
+        super().clear_cache()
+        self._mapping_cache.clear()
+        self._file_cache.clear()
+        self._mapped_fields.clear()

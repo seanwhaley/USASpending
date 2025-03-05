@@ -1,6 +1,241 @@
-"""Configuration schema definitions for field validation and transformation."""
-from typing import Dict, List, Any, Optional, Union, ForwardRef
+"""Configuration schema and validation system."""
+from typing import Dict, Any, List, Optional, Union, ForwardRef
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import json
+import yaml
+import jsonschema
 from pydantic import BaseModel, Field, ConfigDict
+
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
+
+# Core configuration schema
+CORE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "paths": {
+            "type": "object",
+            "properties": {
+                "data_dir": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "log_dir": {"type": "string"}
+            },
+            "required": ["data_dir", "output_dir"]
+        },
+        "entity_factory": {
+            "type": "object",
+            "properties": {
+                "class": {"type": "string"},
+                "config": {"type": "object"}
+            },
+            "required": ["class"]
+        },
+        "entity_store": {
+            "type": "object",
+            "properties": {
+                "class": {"type": "string"},
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "storage_type": {"enum": ["sqlite", "filesystem"]},
+                        "path": {"type": "string"}
+                    },
+                    "required": ["storage_type", "path"]
+                }
+            },
+            "required": ["class", "config"]
+        },
+        "validation_service": {
+            "type": "object",
+            "properties": {
+                "class": {"type": "string"},
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "rules_path": {"type": "string"},
+                        "strict_mode": {"type": "boolean"}
+                    }
+                }
+            },
+            "required": ["class"]
+        },
+        "transformer_factory": {
+            "type": "object",
+            "properties": {
+                "class": {"type": "string"},
+                "config": {"type": "object"}
+            }
+        },
+        "processing": {
+            "type": "object",
+            "properties": {
+                "chunk_size": {"type": "integer", "minimum": 1},
+                "worker_threads": {"type": "integer", "minimum": 1},
+                "max_retries": {"type": "integer", "minimum": 0}
+            }
+        },
+        "logging": {
+            "type": "object",
+            "properties": {
+                "level": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+                "format": {"type": "string"},
+                "file": {"type": "string"}
+            }
+        }
+    },
+    "required": ["paths", "entity_factory", "entity_store", "validation_service"]
+}
+
+@dataclass
+class ValidationError:
+    """Configuration validation error."""
+    path: str
+    message: str
+    severity: str = "error"
+
+class ConfigValidator:
+    """Validates configuration against schema."""
+    
+    def __init__(self, schema: Dict[str, Any]):
+        """Initialize with JSON schema."""
+        self.schema = schema
+        self.errors: List[ValidationError] = []
+        
+    def validate(self, config: Dict[str, Any]) -> bool:
+        """Validate configuration against schema."""
+        self.errors.clear()
+        
+        try:
+            jsonschema.validate(config, self.schema)
+        except jsonschema.exceptions.ValidationError as e:
+            self._add_error(str(e.path), str(e))
+            return False
+        except Exception as e:
+            self._add_error("", f"Validation error: {str(e)}")
+            return False
+            
+        # Additional custom validations
+        return self._validate_paths(config)
+        
+    def _validate_paths(self, config: Dict[str, Any]) -> bool:
+        """Validate path configurations."""
+        paths = config.get('paths', {})
+        valid = True
+        
+        for key, path in paths.items():
+            path_obj = Path(path)
+            
+            # Check existence for input paths
+            if key.endswith('_dir'):
+                if not path_obj.exists():
+                    if key in ('output_dir', 'log_dir'):
+                        try:
+                            path_obj.mkdir(parents=True, exist_ok=True)
+                        except Exception as e:
+                            self._add_error(
+                                f"paths.{key}",
+                                f"Could not create directory: {str(e)}"
+                            )
+                            valid = False
+                    else:
+                        self._add_error(
+                            f"paths.{key}",
+                            f"Path does not exist: {path}"
+                        )
+                        valid = False
+                        
+            # Check permissions
+            try:
+                if not os.access(path, os.R_OK):
+                    self._add_error(
+                        f"paths.{key}",
+                        f"Path not readable: {path}"
+                    )
+                    valid = False
+                    
+                if key in ('output_dir', 'log_dir'):
+                    if not os.access(path, os.W_OK):
+                        self._add_error(
+                            f"paths.{key}",
+                            f"Path not writable: {path}"
+                        )
+                        valid = False
+            except Exception as e:
+                self._add_error(
+                    f"paths.{key}",
+                    f"Error checking permissions: {str(e)}"
+                )
+                valid = False
+                
+        return valid
+        
+    def _add_error(self, path: str, message: str,
+                   severity: str = "error") -> None:
+        """Add validation error."""
+        self.errors.append(ValidationError(
+            path=path,
+            message=message,
+            severity=severity
+        ))
+        
+    def get_errors(self) -> List[ValidationError]:
+        """Get validation errors."""
+        return self.errors.copy()
+
+class ConfigLoader:
+    """Loads and validates configuration from files."""
+    
+    def __init__(self, schema: Dict[str, Any]):
+        """Initialize with schema."""
+        self.validator = ConfigValidator(schema)
+        
+    def load_file(self, path: str) -> Optional[Dict[str, Any]]:
+        """Load configuration from file."""
+        try:
+            with open(path, 'r') as f:
+                if path.endswith('.json'):
+                    config = json.load(f)
+                elif path.endswith(('.yml', '.yaml')):
+                    config = yaml.safe_load(f)
+                else:
+                    raise ValueError(
+                        f"Unsupported config file format: {path}"
+                    )
+                    
+            if self.validator.validate(config):
+                return config
+                
+            for error in self.validator.get_errors():
+                logger.error(
+                    f"Config validation error at {error.path}: "
+                    f"{error.message}"
+                )
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error loading config file: {str(e)}")
+            return None
+            
+    def merge_configs(self, base: Dict[str, Any],
+                     override: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge two configurations, override taking precedence."""
+        merged = base.copy()
+        
+        def merge_dict(target: Dict[str, Any],
+                      source: Dict[str, Any]) -> None:
+            for key, value in source.items():
+                if (key in target and isinstance(target[key], dict)
+                        and isinstance(value, dict)):
+                    merge_dict(target[key], value)
+                else:
+                    target[key] = value
+                    
+        merge_dict(merged, override)
+        return merged
 
 class TransformOperation(BaseModel):
     """Schema for transformation operations."""

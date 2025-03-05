@@ -1,9 +1,12 @@
 """Platform-specific file operations module."""
 import os
-import logging
-import json
 import csv
+import json
 import time
+import glob
+import fnmatch
+import logging
+import tempfile
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Callable, TextIO, BinaryIO, Iterator, TypeVar
@@ -33,13 +36,9 @@ try:
     else:
         try:
             import fcntl
-            # Get constants or use defaults
-            LOCK_EX = getattr(fcntl, 'LOCK_EX', 2)
-            LOCK_UN = getattr(fcntl, 'LOCK_UN', 8)  
-            LOCK_NB = getattr(fcntl, 'LOCK_NB', 4)
             _has_locking = True
         except ImportError:
-            pass
+            logger.warning("fcntl not available on this platform")
 except ImportError:
     logger.warning("File locking modules not available on this platform")
 
@@ -70,9 +69,9 @@ class RetryableError(FileOperationError):
     pass
 
 def retry_on_exception(max_retries: int = DEFAULT_MAX_RETRIES,
-                       retry_delay: float = DEFAULT_RETRY_DELAY,
-                       backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
-                       retry_exceptions: tuple = DEFAULT_RETRY_EXCEPTIONS) -> Callable:
+                      retry_delay: float = DEFAULT_RETRY_DELAY,
+                      backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
+                      retry_exceptions: tuple = DEFAULT_RETRY_EXCEPTIONS) -> Callable:
     """Decorator to retry functions on exception.
     
     Args:
@@ -87,24 +86,23 @@ def retry_on_exception(max_retries: int = DEFAULT_MAX_RETRIES,
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
-            attempt = 0
+            last_exception = None
             delay = retry_delay
             
-            while attempt <= max_retries:
+            for attempt in range(max_retries + 1):
                 try:
                     return func(*args, **kwargs)
                 except retry_exceptions as e:
-                    attempt += 1
-                    if attempt > max_retries:
-                        logger.error(f"Max retries ({max_retries}) exceeded for {func.__name__}: {str(e)}")
-                        raise RetryableError(f"Operation failed after {max_retries} retries: {str(e)}")
-                        
-                    logger.warning(
-                        f"Attempt {attempt}/{max_retries} failed for {func.__name__}: "
-                        f"{str(e)}. Retrying in {delay:.2f}s..."
-                    )
-                    time.sleep(delay)
-                    delay *= backoff_factor
+                    last_exception = e
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"Attempt {attempt + 1}/{max_retries} failed: {str(e)}. "
+                            f"Retrying in {delay} seconds..."
+                        )
+                        time.sleep(delay)
+                        delay *= backoff_factor
+                    
+            raise RetryableError(f"Operation failed after {max_retries} attempts: {str(last_exception)}")
                     
         return wrapper
     return decorator
@@ -144,10 +142,15 @@ def platform_lock_file(file: Any) -> None:
         validate_file_operation(file, 'lock')
         
         if os.name == 'nt':
-            msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+            except (IOError, OSError) as e:
+                raise FileAccessError(f"Failed to lock file: {str(e)}")
         else:
-            if 'fcntl' in globals():
-                fcntl.flock(file.fileno(), LOCK_EX | LOCK_NB)
+            try:
+                fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (IOError, OSError) as e:
+                raise FileAccessError(f"Failed to lock file: {str(e)}")
                 
     except ValueError as ve:
         logger.warning(f"File validation failed: {str(ve)}")
@@ -163,10 +166,15 @@ def platform_unlock_file(file: Any) -> None:
         validate_file_operation(file, 'unlock')
         
         if os.name == 'nt':
-            msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+            try:
+                msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+            except (IOError, OSError) as e:
+                logger.warning(f"Failed to unlock file: {str(e)}")
         else:
-            if 'fcntl' in globals():
-                fcntl.flock(file.fileno(), LOCK_UN)
+            try:
+                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+            except (IOError, OSError) as e:
+                logger.warning(f"Failed to unlock file: {str(e)}")
                 
     except ValueError as ve:
         logger.warning(f"File validation failed: {str(ve)}")
@@ -188,31 +196,31 @@ def validate_file_path(path: str, mode: str = 'r') -> None:
         
     if mode == 'r':
         if not os.path.exists(path):
-            raise FileNotFoundError(f"File does not exist: {path}")
+            raise FileNotFoundError(f"File not found: {path}")
         if not os.path.isfile(path):
             raise ValueError(f"Path is not a file: {path}")
         if not os.access(path, os.R_OK):
-            raise FileAccessError(f"File is not readable: {path}")
+            raise FileAccessError(f"File not readable: {path}")
     elif mode == 'w':
         dir_path = os.path.dirname(path) or '.'
         if not os.path.exists(dir_path):
-            raise FileNotFoundError(f"Directory does not exist: {dir_path}")
+            raise FileNotFoundError(f"Directory not found: {dir_path}")
         if not os.access(dir_path, os.W_OK):
-            raise FileAccessError(f"Directory is not writable: {dir_path}")
+            raise FileAccessError(f"Directory not writable: {dir_path}")
     else:
         raise ValueError(f"Invalid file mode: {mode}")
 
 @contextmanager
 def safe_open_file(path: str, mode: str = 'r', encoding: Optional[str] = None, 
-                  newline: Optional[str] = None, **kwargs) -> Iterator[TextIO]:
-    """Safely open a file with validation and error handling.
+                   newline: Optional[str] = None, **kwargs) -> Iterator[TextIO]:
+    """Safely open a file with proper validation and error handling.
     
     Args:
         path: Path to file
-        mode: File mode ('r', 'w', 'a', etc.)
+        mode: File open mode
         encoding: File encoding
-        newline: Newline character handling
-        **kwargs: Additional arguments for open()
+        newline: Newline handling
+        **kwargs: Additional open() arguments
         
     Yields:
         File object
@@ -220,36 +228,30 @@ def safe_open_file(path: str, mode: str = 'r', encoding: Optional[str] = None,
     Raises:
         FileOperationError: On file operation errors
     """
-    file = None
+    validate_file_path(path, mode[0])
+    
     try:
-        is_read = 'r' in mode and not ('+' in mode)
-        validate_file_path(path, 'r' if is_read else 'w')
-        file = open(path, mode, encoding=encoding, newline=newline, **kwargs)
-        yield file
-    except FileNotFoundError as e:
-        raise FileNotFoundError(f"Error opening file {path}: {str(e)}")
-    except (IOError, OSError) as e:
-        raise FileAccessError(f"Error accessing file {path}: {str(e)}")
-    except Exception as e:
-        raise FileOperationError(f"Error with file {path}: {str(e)}")
+        with open(path, mode, encoding=encoding, newline=newline, **kwargs) as f:
+            if 'w' in mode:
+                platform_lock_file(f)
+            yield f
+    except IOError as e:
+        raise FileOperationError(f"Failed to {mode} file {path}: {str(e)}")
     finally:
-        if file and not file.closed:
-            try:
-                file.close()
-            except Exception as e:
-                logger.warning(f"Error closing file {path}: {str(e)}")
+        if 'w' in mode:
+            platform_unlock_file(f)
 
 @retry_on_exception()
 def read_text_file(path: str, encoding: str = 'utf-8', strip: bool = True) -> str:
-    """Read text file with retry logic.
+    """Read text file with retries.
     
     Args:
         path: Path to file
         encoding: File encoding
-        strip: Whether to strip whitespace from content
+        strip: Whether to strip whitespace
         
     Returns:
-        File content as string
+        File contents as string
         
     Raises:
         FileOperationError: On file operation errors
@@ -260,42 +262,40 @@ def read_text_file(path: str, encoding: str = 'utf-8', strip: bool = True) -> st
 
 @retry_on_exception()
 def write_text_file(path: str, content: str, encoding: str = 'utf-8', 
-                   make_dirs: bool = False, atomic: bool = True) -> None:
-    """Write text file with retry logic and atomic operations.
+                    make_dirs: bool = False, atomic: bool = True) -> None:
+    """Write text file with retries.
     
     Args:
         path: Path to file
         content: Content to write
         encoding: File encoding
-        make_dirs: Create parent directories if they don't exist
-        atomic: Use atomic write operation
+        make_dirs: Create parent directories if needed
+        atomic: Use atomic write
         
     Raises:
         FileOperationError: On file operation errors
     """
     if make_dirs:
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
     if atomic:
-        temp_path = f"{path}.tmp"
+        temp_path = path + '.tmp'
         try:
             with safe_open_file(temp_path, 'w', encoding=encoding) as f:
                 f.write(content)
-            os.replace(temp_path, path)
-        except Exception as e:
-            if os.path.exists(temp_path):
-                try:
-                    os.remove(temp_path)
-                except:
-                    pass
-            raise FileOperationError(f"Error writing file {path}: {str(e)}")
+            atomic_replace(temp_path, path)
+        finally:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
     else:
         with safe_open_file(path, 'w', encoding=encoding) as f:
             f.write(content)
 
 @retry_on_exception()
 def read_json_file(path: str, encoding: str = 'utf-8') -> Dict[str, Any]:
-    """Read JSON file with retry logic.
+    """Read JSON file with retries.
     
     Args:
         path: Path to file
@@ -306,43 +306,56 @@ def read_json_file(path: str, encoding: str = 'utf-8') -> Dict[str, Any]:
         
     Raises:
         FileOperationError: On file operation errors
-        FileFormatError: On JSON parsing errors
+        FileFormatError: On JSON parse errors
     """
     try:
         with safe_open_file(path, 'r', encoding=encoding) as f:
             return json.load(f)
     except json.JSONDecodeError as e:
-        raise FileFormatError(f"Invalid JSON in file {path}: {str(e)}")
+        raise FileFormatError(f"Invalid JSON in {path}: {str(e)}")
 
 @retry_on_exception()
 def write_json_file(path: str, data: Dict[str, Any], encoding: str = 'utf-8',
-                   indent: int = 2, ensure_ascii: bool = False, 
-                   make_dirs: bool = False, atomic: bool = True) -> None:
-    """Write JSON file with retry logic and atomic operations.
+                    indent: int = 2, ensure_ascii: bool = False, 
+                    make_dirs: bool = False, atomic: bool = True) -> None:
+    """Write JSON file with retries.
     
     Args:
         path: Path to file
         data: Data to write
         encoding: File encoding
         indent: JSON indentation
-        ensure_ascii: Whether to ensure ASCII output
-        make_dirs: Create parent directories if they don't exist
-        atomic: Use atomic write operation
+        ensure_ascii: Escape non-ASCII characters
+        make_dirs: Create parent directories if needed
+        atomic: Use atomic write
         
     Raises:
         FileOperationError: On file operation errors
     """
-    try:
-        json_content = json.dumps(data, indent=indent, ensure_ascii=ensure_ascii)
-        write_text_file(path, json_content, encoding=encoding, 
-                       make_dirs=make_dirs, atomic=atomic)
-    except TypeError as e:
-        raise FileFormatError(f"Error serializing JSON for file {path}: {str(e)}")
+    if make_dirs:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
+    content = json.dumps(data, indent=indent, ensure_ascii=ensure_ascii)
+    
+    if atomic:
+        temp_path = path + '.tmp'
+        try:
+            with safe_open_file(temp_path, 'w', encoding=encoding) as f:
+                f.write(content)
+            atomic_replace(temp_path, path)
+        finally:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+    else:
+        with safe_open_file(path, 'w', encoding=encoding) as f:
+            f.write(content)
 
 @retry_on_exception()
 def read_csv_file(path: str, encoding: str = 'utf-8', delimiter: str = ',', 
-                 quotechar: str = '"', has_header: bool = True) -> List[Dict[str, Any]]:
-    """Read CSV file with retry logic.
+                  quotechar: str = '"', has_header: bool = True) -> List[Dict[str, Any]]:
+    """Read CSV file with retries.
     
     Args:
         path: Path to file
@@ -352,215 +365,215 @@ def read_csv_file(path: str, encoding: str = 'utf-8', delimiter: str = ',',
         has_header: Whether file has header row
         
     Returns:
-        List of dictionaries with CSV data
+        List of row dictionaries
         
     Raises:
         FileOperationError: On file operation errors
-        FileFormatError: On CSV parsing errors
+        FileFormatError: On CSV parse errors
     """
     try:
         with safe_open_file(path, 'r', encoding=encoding, newline='') as f:
-            if has_header:
-                reader = csv.DictReader(f, delimiter=delimiter, quotechar=quotechar)
-                return list(reader)
-            else:
-                reader = csv.reader(f, delimiter=delimiter, quotechar=quotechar)
-                data = list(reader)
-                return [dict(zip([f"col{i}" for i in range(len(row))], row)) for row in data]
+            reader = csv.DictReader(f, delimiter=delimiter, quotechar=quotechar) if has_header else \
+                    csv.reader(f, delimiter=delimiter, quotechar=quotechar)
+            return [row for row in reader]
     except csv.Error as e:
-        raise FileFormatError(f"CSV parsing error in file {path}: {str(e)}")
+        raise FileFormatError(f"Invalid CSV in {path}: {str(e)}")
 
 @retry_on_exception()
 def write_csv_file(path: str, data: List[Dict[str, Any]], fieldnames: Optional[List[str]] = None,
-                  encoding: str = 'utf-8', delimiter: str = ',', quotechar: str = '"',
-                  make_dirs: bool = False, atomic: bool = True) -> None:
-    """Write CSV file with retry logic and atomic operations.
+                   encoding: str = 'utf-8', delimiter: str = ',', quotechar: str = '"',
+                   make_dirs: bool = False, atomic: bool = True) -> None:
+    """Write CSV file with retries.
     
     Args:
         path: Path to file
-        data: List of dictionaries to write
-        fieldnames: List of field names (column headers)
+        data: List of row dictionaries
+        fieldnames: List of field names
         encoding: File encoding
         delimiter: CSV delimiter
         quotechar: CSV quote character
-        make_dirs: Create parent directories if they don't exist
-        atomic: Use atomic write operation
+        make_dirs: Create parent directories if needed
+        atomic: Use atomic write
         
     Raises:
         FileOperationError: On file operation errors
     """
-    if not data:
-        raise ValueError("No data provided for CSV writing")
+    if make_dirs:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         
-    # Determine fieldnames if not provided
-    if fieldnames is None:
+    if not fieldnames and data:
         fieldnames = list(data[0].keys())
         
-    if make_dirs:
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    
-    try:
-        if atomic:
-            temp_path = f"{path}.tmp"
+    if atomic:
+        temp_path = path + '.tmp'
+        try:
             with safe_open_file(temp_path, 'w', encoding=encoding, newline='') as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=delimiter, 
-                                      quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
+                                      quotechar=quotechar)
                 writer.writeheader()
                 writer.writerows(data)
-            os.replace(temp_path, path)
-        else:
-            with safe_open_file(path, 'w', encoding=encoding, newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=delimiter, 
-                                      quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
-                writer.writeheader()
-                writer.writerows(data)
-    except csv.Error as e:
-        raise FileFormatError(f"CSV writing error for file {path}: {str(e)}")
-    except Exception as e:
-        if atomic and os.path.exists(temp_path):
+            atomic_replace(temp_path, path)
+        finally:
             try:
-                os.remove(temp_path)
-            except:
+                os.unlink(temp_path)
+            except OSError:
                 pass
-        raise FileOperationError(f"Error writing CSV file {path}: {str(e)}")
+    else:
+        with safe_open_file(path, 'w', encoding=encoding, newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=delimiter,
+                                  quotechar=quotechar)
+            writer.writeheader()
+            writer.writerows(data)
 
 @contextmanager
 def csv_reader(path: str, encoding: str = 'utf-8', delimiter: str = ',', 
-              quotechar: str = '"', batch_size: int = 1000) -> Iterator[BatchType]:
-    """Generator for reading CSV in batches with proper resource management.
+               quotechar: str = '"', batch_size: int = 1000) -> Iterator[BatchType]:
+    """Read CSV file in batches.
     
     Args:
-        path: Path to CSV file
+        path: Path to file
         encoding: File encoding
         delimiter: CSV delimiter
         quotechar: CSV quote character
         batch_size: Number of rows to yield at once
         
     Yields:
-        Batches of CSV rows as dictionaries
+        Batches of row dictionaries
         
     Raises:
         FileOperationError: On file operation errors
+        FileFormatError: On CSV parse errors
     """
     try:
         with safe_open_file(path, 'r', encoding=encoding, newline='') as f:
             reader = csv.DictReader(f, delimiter=delimiter, quotechar=quotechar)
             batch = []
+            
             for row in reader:
                 batch.append(row)
                 if len(batch) >= batch_size:
                     yield batch
                     batch = []
-            if batch:  # Yield any remaining rows
+                    
+            if batch:
                 yield batch
     except csv.Error as e:
-        raise FileFormatError(f"CSV parsing error in file {path}: {str(e)}")
+        raise FileFormatError(f"Invalid CSV in {path}: {str(e)}")
 
 @retry_on_exception()
 def ensure_directory(path: str) -> None:
-    """Ensure directory exists, creating it if necessary.
+    """Ensure directory exists.
     
     Args:
         path: Directory path
         
     Raises:
-        FileOperationError: On directory creation error
+        FileOperationError: On file operation errors
     """
     try:
         os.makedirs(path, exist_ok=True)
-    except Exception as e:
+    except OSError as e:
         raise FileOperationError(f"Failed to create directory {path}: {str(e)}")
 
 @retry_on_exception()
 def backup_file(source: str, suffix: str = '.bak', max_backups: int = 5) -> str:
-    """Create backup of a file with versioning.
+    """Create backup of file.
     
     Args:
         source: Source file path
         suffix: Backup file suffix
-        max_backups: Maximum number of backup versions to keep
+        max_backups: Maximum number of backups to keep
         
     Returns:
         Backup file path
         
     Raises:
-        FileOperationError: On backup error
+        FileOperationError: On file operation errors
     """
+    # Ensure source exists
     if not os.path.exists(source):
-        raise FileNotFoundError(f"Source file does not exist: {source}")
+        raise FileNotFoundError(f"Source file not found: {source}")
         
-    # Create backup with timestamp
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    backup_path = f"{source}.{timestamp}{suffix}"
+    # Find next available backup name
+    backup_base = source + suffix
+    backup_path = backup_base
+    counter = 1
     
+    while os.path.exists(backup_path) and counter < max_backups:
+        backup_path = f"{backup_base}.{counter}"
+        counter += 1
+        
+    # Remove oldest backup if at limit
+    if counter == max_backups and os.path.exists(backup_path):
+        os.unlink(backup_path)
+        
+    # Copy source to backup
     try:
         shutil.copy2(source, backup_path)
-        
-        # Clean up old backups if needed
-        dir_path = os.path.dirname(source) or '.'
-        base_name = os.path.basename(source)
-        backups = sorted([
-            os.path.join(dir_path, f) for f in os.listdir(dir_path)
-            if f.startswith(base_name + '.') and f.endswith(suffix)
-        ])
-        
-        # Remove oldest backups if we have too many
-        while len(backups) > max_backups:
-            try:
-                os.remove(backups[0])
-                backups.pop(0)
-            except Exception as e:
-                logger.warning(f"Failed to remove old backup {backups[0]}: {str(e)}")
-                break
-                
         return backup_path
-    except Exception as e:
+    except OSError as e:
         raise FileOperationError(f"Failed to create backup of {source}: {str(e)}")
 
 @retry_on_exception()
 def safe_delete(path: str) -> None:
-    """Safely delete a file with retry logic.
+    """Safely delete file.
     
     Args:
-        path: Path to file
+        path: File path
         
     Raises:
-        FileOperationError: On deletion error
+        FileOperationError: On file operation errors
     """
-    if not os.path.exists(path):
-        return
-        
     try:
-        os.remove(path)
-    except Exception as e:
-        raise FileOperationError(f"Failed to delete file {path}: {str(e)}")
+        if os.path.exists(path):
+            os.unlink(path)
+    except OSError as e:
+        raise FileOperationError(f"Failed to delete {path}: {str(e)}")
 
 @retry_on_exception(max_retries=2)  # Fewer retries for atomic operations
 def atomic_replace(source: str, target: str) -> None:
-    """Atomically replace target file with source file.
+    """Atomically replace target with source.
     
     Args:
         source: Source file path
         target: Target file path
         
     Raises:
-        FileOperationError: On replace error
+        FileOperationError: On file operation errors
     """
     if not os.path.exists(source):
-        raise FileNotFoundError(f"Source file does not exist: {source}")
+        raise FileNotFoundError(f"Source file not found: {source}")
         
+    # Create backup of target if it exists
+    if os.path.exists(target):
+        try:
+            backup_path = backup_file(target)
+        except FileOperationError:
+            backup_path = None
+            
     try:
-        # On Windows, we may need special handling if target exists
-        if os.path.exists(target) and os.name == 'nt':
-            temp_path = f"{target}.replacing"
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
-            os.rename(target, temp_path)
-            os.rename(source, target)
-            os.remove(temp_path)
+        # Perform atomic replace
+        if os.name == 'nt':
+            # Windows - use rename + replace
+            if os.path.exists(target):
+                os.replace(source, target)
+            else:
+                os.rename(source, target)
         else:
-            os.replace(source, target)
-    except Exception as e:
+            # Unix - use rename (atomic on Unix)
+            os.rename(source, target)
+            
+        # Remove backup on success
+        if backup_path:
+            safe_delete(backup_path)
+            
+    except OSError as e:
+        # Restore from backup on failure
+        if backup_path and os.path.exists(backup_path):
+            try:
+                os.rename(backup_path, target)
+            except OSError:
+                pass  # Can't restore backup
         raise FileOperationError(f"Failed to replace {target} with {source}: {str(e)}")
 
 def get_file_size(path: str) -> int:
@@ -576,11 +589,11 @@ def get_file_size(path: str) -> int:
         FileNotFoundError: If file doesn't exist
     """
     if not os.path.exists(path):
-        raise FileNotFoundError(f"File does not exist: {path}")
+        raise FileNotFoundError(f"File not found: {path}")
     return os.path.getsize(path)
 
 def get_memory_efficient_reader(path: str, encoding: str = 'utf-8', 
-                              batch_size: int = 1000, **kwargs) -> Iterator[Union[BatchType, JsonData]]:
+                               batch_size: int = 1000, **kwargs) -> Iterator[Union[BatchType, JsonData]]:
     """Get memory-efficient reader based on file type.
     
     Args:
@@ -598,21 +611,38 @@ def get_memory_efficient_reader(path: str, encoding: str = 'utf-8',
     ext = os.path.splitext(path)[1].lower()
     
     if ext == '.csv':
-        return csv_reader(
-            path, 
-            encoding=encoding, 
-            batch_size=batch_size,
-            delimiter=kwargs.get('delimiter', ','), 
-            quotechar=kwargs.get('quotechar', '"')
-        )
+        yield from csv_reader(path, encoding=encoding, batch_size=batch_size, **kwargs)
     elif ext == '.json':
-        # For JSON files, we currently need to load the whole file
-        # A more efficient JSON streaming parser could be implemented if needed
-        data = read_json_file(path, encoding=encoding)
-        if isinstance(data, list):
-            for i in range(0, len(data), batch_size):
-                yield data[i:i+batch_size]
-        else:
-            yield data
+        with safe_open_file(path, 'r', encoding=encoding) as f:
+            for obj in json.load(f):
+                yield obj
     else:
         raise ValueError(f"Unsupported file type: {ext}")
+
+@retry_on_exception()
+def get_files(directory: str, pattern: str = '*', recursive: bool = False) -> List[str]:
+    """Get list of files matching pattern.
+    
+    Args:
+        directory: Directory to search
+        pattern: Glob pattern to match
+        recursive: Whether to search recursively
+        
+    Returns:
+        List of matching file paths
+        
+    Raises:
+        FileOperationError: On file operation errors
+    """
+    try:
+        if recursive:
+            matches = []
+            for root, _, files in os.walk(directory):
+                for filename in files:
+                    if fnmatch.fnmatch(filename, pattern):
+                        matches.append(os.path.join(root, filename))
+            return matches
+        else:
+            return glob.glob(os.path.join(directory, pattern))
+    except OSError as e:
+        raise FileOperationError(f"Failed to list files in {directory}: {str(e)}")

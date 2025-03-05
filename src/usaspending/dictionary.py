@@ -1,285 +1,376 @@
-"""Data dictionary processing module.
-
-This module handles the conversion of the USASpending Data Dictionary
-from CSV format to a structured JSON format.
-"""
+"""Data dictionary management for field mappings and transformations."""
+from typing import Dict, Any, Optional, List, Set
+from pathlib import Path
 import csv
 import json
-import os
-from datetime import datetime
-from typing import Dict, Any, List, Optional
+from dataclasses import dataclass, field
+from collections import defaultdict
 
-from .file_utils import (
-    read_csv_file, write_json_file, ensure_directory,
-    FileOperationError, FileNotFoundError, FileFormatError
-)
+from .exceptions import ConfigurationError
 from .logging_config import get_logger
+from .schema_mapping import SchemaMapping
+from .transformers import TransformerFactory
+from .interfaces import ISchemaAdapter
 
 logger = get_logger(__name__)
 
-def validate_domain_value_format(value: str, field_name: str) -> None:
-    """Validate domain value format is correct at initialization."""
-    if not value:
-        return
-        
-    lines = [line.strip() for line in value.replace(',', '\n').split('\n')]
-    for line in lines:
-        if '=' in line:
-            parts = [p.strip() for p in line.split('=', 1)]
-            if len(parts) != 2 or not parts[0] or not parts[1]:
-                raise ValueError(f"Invalid domain value format in {field_name}: {line}")
-        elif not line.strip():
-            raise ValueError(f"Empty domain value in {field_name}")
+@dataclass
+class FieldDefinition:
+    """Field definition in data dictionary.
 
-def parse_domain_values(value: str) -> Dict[str, Optional[str]]:
-    """Parse domain values that may contain key-value pairs.
-    
-    Args:
-        value: Raw domain value string from CSV
-        
-    Returns:
-        Dictionary of parsed key-value pairs or values
+    Attributes:
+        name: Field name
+        type: Field data type
+        description: Optional field description
+        source_field: Optional source field name for mapping
+        transformations: List of transformation operations
+        validation_rules: List of validation rules
+        is_required: Whether field is required
+        is_key: Whether field is a key field
+        default_value: Default value if field is missing
+        groups: List of validation groups field belongs to
     """
-    if not value or not value.strip():
-        return {}
-    
-    result = {}
-    # Remove any leading/trailing whitespace first
-    value = value.strip()
-    
-    # Handle both comma-separated and newline-separated values
-    lines = []
-    for line in value.split('\n'):
-        lines.extend(part.strip() for part in line.split(','))
-    
-    # Filter out empty lines before processing
-    lines = [line for line in lines if line]
-    
-    for line in lines:
-        if '=' in line:
-            parts = line.split('=', 1)
-            key = parts[0].strip()
-            val = parts[1].strip() if len(parts) > 1 else None
-            if key:  # Only add if key is not empty
-                result[key] = val
-        elif line.strip():
-            result[line.strip()] = None
-    
-    return result
+    name: str
+    type: str
+    description: Optional[str] = None
+    source_field: Optional[str] = None
+    transformations: List[Dict[str, Any]] = field(default_factory=list)
+    validation_rules: List[Dict[str, Any]] = field(default_factory=list)
+    is_required: bool = False
+    is_key: bool = False
+    default_value: Any = None
+    groups: List[str] = field(default_factory=list)
 
-def validate_dictionary_mappings(config: Dict[str, Any]) -> None:
-    """Validate dictionary field mappings at initialization time."""
-    if not isinstance(config, dict):
-        raise ValueError("Configuration must be a dictionary")
-    
-    # Validate global config exists and has required fields
-    if 'global' not in config:
-        raise ValueError("Global configuration is missing")
-    if 'encoding' not in config['global']:
-        raise ValueError("Global encoding configuration is missing")
-    if 'datetime_format' not in config['global']:
-        raise ValueError("Global datetime format configuration is missing")
+    def __post_init__(self):
+        """Validate field definition after initialization."""
+        if not self.name:
+            raise ValueError("Field name is required")
+        if not self.type:
+            raise ValueError("Field type is required")
         
-    dict_config = config.get('data_dictionary')
-    if not isinstance(dict_config, dict):
-        raise ValueError("Data dictionary config must be a dictionary")
+        # Set source field to name if not specified
+        if not self.source_field:
+            self.source_field = self.name
 
-    # Validate input configuration
-    input_cfg = dict_config.get('input', {})
-    if not isinstance(input_cfg, dict):
-        raise ValueError("Input configuration must be a dictionary")
-    
-    if 'file' not in input_cfg:
-        raise ValueError("Input file path must be specified")
+    def has_transformation(self, transform_type: str) -> bool:
+        """Check if field has a specific transformation type.
         
-    required = {'Element', 'Definition', 'Domain Values', 'Domain Values Code Description'}
-    configured = set(input_cfg.get('required_columns', []))
-    missing = required - configured
-    if missing:
-        raise ValueError(f"Missing required column configuration: {', '.join(missing)}")
-
-    # Validate output configuration
-    output_cfg = dict_config.get('output', {})
-    if not isinstance(output_cfg, dict):
-        raise ValueError("Output configuration must be a dictionary")
-    
-    if 'file' not in output_cfg:
-        raise ValueError("Output file path must be specified")
-
-    # Validate parsing configuration
-    parsing = dict_config.get('parsing', {})
-    if not isinstance(parsing, dict):
-        raise ValueError("Parsing configuration must be a dictionary")
-        
-    preserve_newlines = parsing.get('preserve_newlines_for', [])
-    if not isinstance(preserve_newlines, list):
-        raise ValueError("preserve_newlines_for must be a list")
-    
-    # Validate preserve_newlines entries against known column names
-    valid_columns = {
-        'Element', 'Definition', 'Domain Values', 'Domain Values Code Description',
-        'Award File', 'Award Element', 
-        'Subaward File', 'Subaward Element',
-        'Account File', 'Account Element',
-        'FPDS Data Dictionary Element', 'Grouping'
-    }
-    invalid_columns = set(preserve_newlines) - valid_columns
-    if invalid_columns:
-        raise ValueError(f"Invalid columns in preserve_newlines_for: {', '.join(invalid_columns)}")
-
-    # Validate field references are valid
-    file_mappings = {'Award', 'Subaward', 'Account'}
-    field_types = {'File', 'Element'}
-    for mapping in file_mappings:
-        for field in field_types:
-            col_name = f"{mapping} {field}"
-            if col_name not in configured:
-                raise ValueError(f"Missing mapping configuration for {col_name}")
-
-def split_cell_values(value: str, preserve_newlines: bool = False, 
-                     config: Optional[Dict[str, Any]] = None) -> List[str]:
-    """Split cell values according to configuration.
-    
-    Args:
-        value: Raw cell value to split
-        preserve_newlines: Whether to preserve newlines in splitting
-        config: DEPRECATED - no longer used
-    """
-    if not value or not value.strip():
-        return []
-
-    if preserve_newlines:
-        values = [v.strip() for v in value.split('\n')]
-    else:
-        values = []
-        for line in value.split('\n'):
-            values.extend(v.strip() for v in line.split(','))
-
-    seen = set()
-    return [v for v in values if v.strip() and not (v in seen or seen.add(v))]
-
-def csv_to_json(config: Dict[str, Any]) -> bool:
-    """Convert data dictionary CSV to JSON using configuration settings.
-    
-    Args:
-        config: Configuration dictionary
-        
-    Returns:
-        True if conversion was successful, False otherwise
-    """
-    try:
-        # Validate all configuration first
-        validate_dictionary_mappings(config)
-        dict_config = config['data_dictionary']
-        global_config = config['global']
-        
-        csv_file_path = os.path.abspath(dict_config['input']['file'])
-        json_file_path = os.path.abspath(dict_config['output']['file'])
-        
-        # Create output directory if needed
-        output_dir = os.path.dirname(json_file_path)
-        if output_dir:
-            try:
-                ensure_directory(output_dir)
-            except FileOperationError as e:
-                logger.error(f"Failed to create output directory: {str(e)}")
-                return False
-        
-        preserve_newlines_for = set(dict_config.get('parsing', {}).get('preserve_newlines_for', []))
-        
-        # Process CSV with validated configuration
-        entries = []
-        try:
-            rows = read_csv_file(
-                csv_file_path,
-                encoding=global_config['encoding'],
-                delimiter=',',
-                quotechar='"',
-                has_header=True
-            )
+        Args:
+            transform_type: Type of transformation to check for
             
-            # Pre-validate and process rows
-            for row in rows:
-                if not any(row.values()):
-                    continue
-                    
-                # Validate domain value formats
-                for field in ['Domain Values', 'Domain Values Code Description']:
-                    if row.get(field):
-                        validate_domain_value_format(row[field], field)
-                        
-                entry = {
-                    "element_info": {
-                        "element": row.get('Element', '').strip(),
-                        "definition": row.get('Definition', '').strip(),
-                        "fpds_element": row.get('FPDS Data Dictionary Element', '').strip(),
-                        "grouping": row.get('Grouping', '').strip()
-                    },
-                    "domain_info": {
-                        "values": parse_domain_values(row.get('Domain Values', '')),
-                        "code_description": parse_domain_values(row.get('Domain Values Code Description', ''))
-                    },
-                    "file_mappings": {
-                        "award": {
-                            "file": split_cell_values(row.get('Award File', ''), 'Award File' in preserve_newlines_for),
-                            "element": split_cell_values(row.get('Award Element', ''), 'Award Element' in preserve_newlines_for)
+        Returns:
+            True if transformation exists, False otherwise
+        """
+        return any(t.get('type') == transform_type for t in self.transformations)
+
+    def has_validation_rule(self, rule_type: str) -> bool:
+        """Check if field has a specific validation rule.
+        
+        Args:
+            rule_type: Type of validation rule to check for
+            
+        Returns:
+            True if rule exists, False otherwise
+        """
+        return any(r.get('type') == rule_type for r in self.validation_rules)
+
+    def in_group(self, group_name: str) -> bool:
+        """Check if field belongs to a validation group.
+        
+        Args:
+            group_name: Name of group to check
+            
+        Returns:
+            True if field is in group, False otherwise
+        """
+        return group_name in self.groups
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert field definition to dictionary.
+        
+        Returns:
+            Dictionary representation of field definition
+        """
+        return {
+            'name': self.name,
+            'type': self.type,
+            'description': self.description,
+            'source_field': self.source_field,
+            'transformations': self.transformations,
+            'validation_rules': self.validation_rules,
+            'is_required': self.is_required,
+            'is_key': self.is_key,
+            'default_value': self.default_value,
+            'groups': self.groups
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'FieldDefinition':
+        """Create field definition from dictionary.
+        
+        Args:
+            data: Dictionary containing field definition
+            
+        Returns:
+            New FieldDefinition instance
+        """
+        return cls(
+            name=data['name'],
+            type=data['type'],
+            description=data.get('description'),
+            source_field=data.get('source_field'),
+            transformations=data.get('transformations', []),
+            validation_rules=data.get('validation_rules', []),
+            is_required=data.get('is_required', False),
+            is_key=data.get('is_key', False),
+            default_value=data.get('default_value'),
+            groups=data.get('groups', [])
+        )
+
+class Dictionary:
+    """Manages field definitions and transformations."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize dictionary with configuration.
+        
+        Args:
+            config: Configuration dictionary with field definitions
+        """
+        self.fields: Dict[str, FieldDefinition] = {}
+        self.field_groups: Dict[str, Set[str]] = defaultdict(set)
+        self.adapters: Dict[str, ISchemaAdapter] = {}
+        self._transformer_factory = TransformerFactory()
+        self._schema_mapping = SchemaMapping(self._transformer_factory)
+        self._load_fields(config)
+        self._initialize_adapters()
+
+    def _load_fields(self, config: Dict[str, Any]) -> None:
+        """Load field definitions from configuration.
+        
+        Args:
+            config: Configuration dictionary
+        """
+        field_properties = config.get('field_properties', {})
+        
+        for field_name, props in field_properties.items():
+            validation = props.get('validation', {})
+            field_def = FieldDefinition(
+                name=field_name,
+                type=props['type'],
+                description=props.get('description'),
+                source_field=props.get('source_field'),
+                transformations=props.get('transformation', {}).get('operations', []),
+                validation_rules=validation.get('rules', []),
+                is_required=props.get('required', False),
+                is_key=props.get('is_key', False),
+                default_value=props.get('default'),
+                groups=validation.get('groups', [])
+            )
+            self.fields[field_name] = field_def
+            
+            # Update field group mappings
+            for group in field_def.groups:
+                self.field_groups[group].add(field_name)
+
+    def _initialize_adapters(self) -> None:
+        """Initialize schema adapters for fields."""
+        for field_name, field_def in self.fields.items():
+            try:
+                adapter = self._schema_mapping.create_adapter(
+                    field_def.type,
+                    {
+                        'validation': {
+                            'rules': field_def.validation_rules,
+                            'groups': field_def.groups
                         },
-                        "subaward": {
-                            "file": split_cell_values(row.get('Subaward File', ''), 'Subaward File' in preserve_newlines_for),
-                            "element": split_cell_values(row.get('Subaward Element', ''), 'Subaward Element' in preserve_newlines_for)
-                        },
-                        "account": {
-                            "file": split_cell_values(row.get('Account File', ''), 'Account File' in preserve_newlines_for),
-                            "element": split_cell_values(row.get('Account Element', ''), 'Account Element' in preserve_newlines_for)
+                        'transformation': {
+                            'operations': field_def.transformations
                         }
                     }
+                )
+                if adapter:
+                    self.adapters[field_name] = adapter
+            except Exception as e:
+                logger.error(f"Failed to create adapter for {field_name}: {str(e)}")
+
+    def get_field(self, field_name: str) -> Optional[FieldDefinition]:
+        """Get field definition by name.
+        
+        Args:
+            field_name: Name of the field
+            
+        Returns:
+            FieldDefinition if found, None otherwise
+        """
+        return self.fields.get(field_name)
+
+    def get_field_type(self, field_name: str) -> Optional[str]:
+        """Get field type by name.
+        
+        Args:
+            field_name: Name of the field
+            
+        Returns:
+            Field type if found, None otherwise
+        """
+        field = self.get_field(field_name)
+        return field.type if field else None
+
+    def get_field_transformations(self, field_name: str) -> List[Dict[str, Any]]:
+        """Get transformations for a field.
+        
+        Args:
+            field_name: Name of the field
+            
+        Returns:
+            List of transformation configurations
+        """
+        field = self.get_field(field_name)
+        return field.transformations if field else []
+
+    def get_validation_rules(self, field_name: str) -> List[Dict[str, Any]]:
+        """Get validation rules for a field.
+        
+        Args:
+            field_name: Name of the field
+            
+        Returns:
+            List of validation rules
+        """
+        field = self.get_field(field_name)
+        return field.validation_rules if field else []
+
+    def get_fields_by_group(self, group_name: str) -> List[str]:
+        """Get fields belonging to a validation group.
+        
+        Args:
+            group_name: Name of the validation group
+            
+        Returns:
+            List of field names in the group
+        """
+        return sorted(self.field_groups.get(group_name, set()))
+
+    def get_key_fields(self) -> List[str]:
+        """Get list of key fields.
+        
+        Returns:
+            List of field names that are marked as keys
+        """
+        return [name for name, field in self.fields.items() if field.is_key]
+
+    def get_required_fields(self) -> List[str]:
+        """Get list of required fields.
+        
+        Returns:
+            List of field names that are marked as required
+        """
+        return [name for name, field in self.fields.items() if field.is_required]
+
+    def validate_field(self, field_name: str, value: Any) -> List[str]:
+        """Validate a field value.
+        
+        Args:
+            field_name: Name of the field to validate
+            value: Value to validate
+            
+        Returns:
+            List of validation error messages
+        """
+        adapter = self.adapters.get(field_name)
+        if not adapter:
+            return []
+            
+        if not adapter.validate(value, field_name):
+            return adapter.get_validation_errors()
+        return []
+
+    def transform_field(self, field_name: str, value: Any) -> Any:
+        """Transform a field value.
+        
+        Args:
+            field_name: Name of the field to transform
+            value: Value to transform
+            
+        Returns:
+            Transformed value
+        """
+        adapter = self.adapters.get(field_name)
+        if not adapter:
+            return value
+            
+        try:
+            return adapter.transform(value, field_name)
+        except Exception as e:
+            logger.error(f"Transform failed for {field_name}: {str(e)}")
+            return None
+
+    @classmethod
+    def from_csv(cls, csv_path: Path, config: Dict[str, Any]) -> 'Dictionary':
+        """Create dictionary from CSV file and base config.
+        
+        Args:
+            csv_path: Path to CSV data dictionary file
+            config: Base configuration to extend
+            
+        Returns:
+            New Dictionary instance
+            
+        Raises:
+            ConfigurationError: If CSV file cannot be loaded
+        """
+        try:
+            field_properties = config.get('field_properties', {})
+            
+            with open(csv_path, 'r', newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    field_name = row['field_name']
+                    if field_name in field_properties:
+                        # Update existing field definition
+                        field_properties[field_name].update({
+                            'description': row.get('description'),
+                            'type': row.get('type', field_properties[field_name]['type']),
+                            'required': row.get('required', '').lower() == 'true',
+                            'is_key': row.get('is_key', '').lower() == 'true'
+                        })
+                    else:
+                        # Add new field definition
+                        field_properties[field_name] = {
+                            'type': row['type'],
+                            'description': row.get('description'),
+                            'required': row.get('required', '').lower() == 'true',
+                            'is_key': row.get('is_key', '').lower() == 'true'
+                        }
+            
+            config['field_properties'] = field_properties
+            return cls(config)
+            
+        except Exception as e:
+            raise ConfigurationError(f"Failed to load data dictionary CSV: {str(e)}")
+
+    def to_json(self, json_path: Path) -> None:
+        """Save dictionary to JSON file.
+        
+        Args:
+            json_path: Path to save JSON file
+        """
+        data = {
+            'fields': {
+                name: {
+                    'type': field.type,
+                    'description': field.description,
+                    'source_field': field.source_field,
+                    'transformations': field.transformations,
+                    'validation_rules': field.validation_rules,
+                    'is_required': field.is_required,
+                    'is_key': field.is_key,
+                    'default_value': field.default_value,
+                    'groups': field.groups
                 }
-                
-                # Clean up empty values
-                clean_entry = {}
-                for category, data in entry.items():
-                    if isinstance(data, dict):
-                        clean_data = {k: v for k, v in data.items() if v not in (None, '', [], {})}
-                        if clean_data:
-                            clean_entry[category] = clean_data
-                    elif data not in (None, '', [], {}):
-                        clean_entry[category] = data
-                
-                if clean_entry:
-                    entries.append(clean_entry)
-
-        except (FileNotFoundError, FileOperationError, FileFormatError) as e:
-            logger.error(f"Error reading CSV file: {str(e)}")
-            return False
-
-        output = {
-            "metadata": {
-                "source": "USASpending Data Dictionary Crosswalk",
-                "version": "1.0",
-                "record_count": len(entries),
-                "generated_at": datetime.now().strftime(global_config['datetime_format'])
-            },
-            "elements": entries
+                for name, field in self.fields.items()
+            }
         }
         
-        # Write to JSON file using validated configuration
-        try:
-            write_json_file(
-                json_file_path,
-                output,
-                encoding=global_config['encoding'],
-                indent=dict_config['output'].get('indent', 2),
-                ensure_ascii=dict_config['output'].get('ensure_ascii', False),
-                make_dirs=True,
-                atomic=True
-            )
-            logger.info(f"Successfully processed {len(entries)} dictionary entries")
-            return True
-            
-        except FileOperationError as e:
-            logger.error(f"Error writing JSON file: {str(e)}")
-            return False
-        
-    except Exception as e:
-        logger.error(f"Error processing data dictionary: {str(e)}")
-        return False
+        with open(json_path, 'w') as f:
+            json.dump(data, f, indent=2)

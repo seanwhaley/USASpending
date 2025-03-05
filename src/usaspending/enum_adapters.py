@@ -1,155 +1,119 @@
-"""Enumerated field adapters implementation."""
-from typing import Any, Dict, Optional, Union, Set
-from pydantic import BaseModel, Field, field_validator
+"""Enumerated value adapters for USASpending data validation."""
+from typing import Dict, Any, List, Optional, Set, Union, Mapping
+import enum
 
-from .schema_adapters import PydanticAdapter, SchemaAdapterFactory, AdapterTransform
+from .interfaces import ISchemaAdapter
 
-class EnumFieldAdapter(PydanticAdapter[str, str]):
-    """Base adapter for enumerated fields."""
+class EnumFieldAdapter(ISchemaAdapter):
+    """Adapter for enum field validation and transformation."""
     
-    def __init__(self, config: Dict[str, Any] = None, enum_class = None):
-        """Initialize enum adapter with optional configuration."""
-        if config is None:
-            config = {}
-            
-        if enum_class:
-            config['values'] = [e.value for e in enum_class]
-            
-        if 'values' not in config:
-            config['values'] = set()
-            
-        super().__init__(config)
-
-    def _create_model(self) -> type[BaseModel]:
-        """Create Pydantic model for enum validation/transformation."""
-        values = self.config.get('values', set())
-        case_sensitive = self.config.get('case_sensitive', True)
-        allow_unknown = self.config.get('allow_unknown', False)
+    def __init__(self, valid_values: List[str], case_sensitive: bool = False):
+        """Initialize enum field adapter.
         
-        # Create validation set
-        valid_values = {str(v) for v in values}
-        value_desc = ', '.join(sorted(valid_values))
+        Args:
+            valid_values: List of valid values
+            case_sensitive: Whether comparison is case sensitive
+        """
+        self.case_sensitive = case_sensitive
+        self.errors: List[str] = []
         
-        class EnumModel(BaseModel):
-            value: str = Field(description=f"Must be one of: {value_desc}")
-            
-            @field_validator('value')
-            @classmethod 
-            def validate_enum(cls, v: str) -> str:
-                check_value = str(v).upper() if not case_sensitive else str(v)
-                valid_set = {str(val).upper() if not case_sensitive else str(val) for val in valid_values}
-                
-                if check_value not in valid_set and not allow_unknown:
-                    raise ValueError(f"Value must be one of: {value_desc}")
-                return v
-            
-            @field_validator('value', mode='before')
-            @classmethod
-            def clean_value(cls, v: Any) -> str:
-                if not isinstance(v, str):
-                    v = str(v)
-                return v.strip()
-        
-        return EnumModel
+        # Store valid values with appropriate case handling
+        if case_sensitive:
+            self.valid_values: Set[str] = set(valid_values)
+        else:
+            self.valid_values: Set[str] = {v.lower() for v in valid_values if v is not None}
     
-    def _validate_config(self) -> None:
-        """Validate enum adapter configuration."""
-        if 'values' not in self.config:
-            raise ValueError("EnumFieldAdapter requires 'values' configuration")
+    def validate(self, value: Any, field_name: str) -> bool:
+        """Validate value against allowed enum values.
         
-        if not isinstance(self.config['values'], (list, set, dict)):
-            raise ValueError("'values' must be a list, set, or dictionary")
-        
-        if 'case_sensitive' in self.config and not isinstance(self.config['case_sensitive'], bool):
-            raise ValueError("'case_sensitive' must be a boolean")
+        Args:
+            value: Value to validate
+            field_name: Field name for error messages
             
-        if 'allow_unknown' in self.config and not isinstance(self.config['allow_unknown'], bool):
-            raise ValueError("'allow_unknown' must be a boolean")
+        Returns:
+            True if value is valid, False otherwise
+        """
+        self.errors = []
+        
+        if value is None:
+            return True
+            
+        check_value = str(value)
+        if not self.case_sensitive:
+            check_value = check_value.lower()
+            
+        if check_value not in self.valid_values:
+            self.errors.append(
+                f"{field_name}: Value '{value}' not in valid values: {sorted(self.valid_values)}"
+            )
+            return False
+            
+        return True
+    
+    def transform(self, value: Any, field_name: str) -> Any:
+        """Transform value to a valid enum value if possible.
+        
+        Args:
+            value: Value to transform
+            field_name: Field name (not used in this implementation)
+            
+        Returns:
+            The original value if valid, None otherwise
+        """
+        if value is None:
+            return None
+            
+        check_value = str(value)
+        if not self.case_sensitive:
+            check_value = check_value.lower()
+            
+        if check_value in self.valid_values:
+            return value
+            
+        return None
+    
+    def get_validation_errors(self) -> List[str]:
+        """Get validation error messages.
+        
+        Returns:
+            List of validation error messages
+        """
+        return self.errors.copy()
 
 class MappedEnumFieldAdapter(EnumFieldAdapter):
-    """Adapter for enums with value mappings and descriptions."""
+    """Adapter for enum fields with value mapping."""
     
-    def __init__(self, config: Dict[str, Any] = None, enum_class = None, mapping: Dict[str, str] = None):
-        """Initialize mapped enum adapter with optional configuration."""
-        if config is None:
-            config = {}
-            
-        if enum_class:
-            config['values'] = [e.value for e in enum_class]
-            
-        if mapping:
-            config['mapping'] = mapping
-            
-        super().__init__(config)
-
-    def _create_model(self) -> type[BaseModel]:
-        """Create Pydantic model for mapped enum validation."""
-        values = self.config.get('values', {})
-        descriptions = self.config.get('descriptions', {})
-        case_sensitive = self.config.get('case_sensitive', True)
-        allow_unknown = self.config.get('allow_unknown', False)
-        mapping = self.config.get('mapping', {})
+    def __init__(self, value_mapping: Dict[str, Any], case_sensitive: bool = False):
+        """Initialize mapped enum field adapter.
         
-        if not isinstance(values, dict):
-            # Convert list/set to dict with identity mapping
-            values = {str(v): str(v) for v in values}
-            
-        value_desc = ', '.join(f'{k}={descriptions.get(k, v)}' for k, v in values.items())
+        Args:
+            value_mapping: Dictionary mapping input values to output values
+            case_sensitive: Whether comparison is case sensitive
+        """
+        super().__init__(list(value_mapping.keys()), case_sensitive)
+        self.value_mapping = value_mapping
         
-        class MappedEnumModel(BaseModel):
-            value: str = Field(description=f"Valid values: {value_desc}")
+        # Create case-insensitive mapping if needed
+        if not case_sensitive:
+            self.mapping = {k.lower(): v for k, v in value_mapping.items()}
+        else:
+            self.mapping = value_mapping
+    
+    def transform(self, value: Any, field_name: str) -> Any:
+        """Transform value using the value mapping.
+        
+        Args:
+            value: Value to transform
+            field_name: Field name (not used in this implementation)
             
-            @field_validator('value')
-            @classmethod
-            def validate_mapped_enum(cls, v: str) -> str:
-                check_value = str(v).upper() if not case_sensitive else str(v)
-                valid_set = {str(val).upper() if not case_sensitive else str(val) for val in values.keys()}
-                
-                if check_value not in valid_set and not allow_unknown:
-                    raise ValueError(f"Invalid value. Must be one of: {value_desc}")
-                return v
-                
-            @field_validator('value', mode='before')
-            @classmethod
-            def clean_mapped_enum(cls, v: Any) -> str:
-                if not isinstance(v, str):
-                    v = str(v)
-                v = v.strip()
-                if not case_sensitive:
-                    v = v.upper()
-                    
-                # Apply mapping if available
-                if v in mapping:
-                    return mapping[v]
-                    
-                # Case-insensitive mapping check
-                if not case_sensitive:
-                    v_upper = v.upper()
-                    for k, mapped in mapping.items():
-                        if str(k).upper() == v_upper:
-                            return mapped
-                            
-                return v
-                
-        return MappedEnumModel
-
-# Register enum-specific transformations
-@AdapterTransform.register('map_values')
-def transform_map_values(value: str, mapping: Dict[str, str], case_sensitive: bool = True) -> str:
-    """Map input values to output values."""
-    check_value = value if case_sensitive else value.upper()
-    mapping_keys = mapping.keys() if case_sensitive else {k.upper(): v for k, v in mapping.items()}
-    return mapping_keys.get(check_value, value)
-
-@AdapterTransform.register('normalize_enum')
-def transform_normalize_enum(value: str, valid_values: Set[str], case_sensitive: bool = True) -> str:
-    """Normalize enum value to match valid values."""
-    if not case_sensitive:
-        check_value = value.upper()
-        valid_set = {v.upper(): v for v in valid_values}
-        return valid_set.get(check_value, value)
-    return value if value in valid_values else value
-
-# Register adapters with factory
-SchemaAdapterFactory.register('enum', EnumFieldAdapter)
-SchemaAdapterFactory.register('mapped_enum', MappedEnumFieldAdapter)
+        Returns:
+            Mapped value if input is valid, None otherwise
+        """
+        if value is None:
+            return None
+            
+        check_value = str(value)
+        if not self.case_sensitive:
+            check_value = check_value.lower()
+            
+        return self.mapping.get(check_value)

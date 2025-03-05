@@ -1,0 +1,163 @@
+---
+theme: light
+title: USASpending Code Review Update Instructions
+description: Instructions for documenting code review updates using PDCA cycle
+version: 2.0.0
+---
+
+# Update Documentation Instructions
+
+## PDCA Cycle Implementation
+
+### Plan
+1. Review original findings
+   - Prioritize issues
+   - Define success criteria
+   - Identify dependencies
+   - Plan verification methods
+
+2. Design Solutions
+   - Document proposed changes
+   - Consider side effects
+   - Plan rollback options
+   - Define test cases
+
+### Do
+1. Implementation Tracking
+   - Document actual changes
+   - Record deviations from plan
+   - Note unexpected issues
+   - Track time/effort
+
+2. Testing Process
+   - Execute test cases
+   - Document results
+   - Record metrics
+   - Note observations
+
+### Check
+1. Validation Process
+   - Compare against success criteria
+   - Verify test results
+   - Measure performance impact
+   - Check for regressions
+
+2. Impact Analysis
+   - Document actual vs expected results
+   - Analyze any deviations
+   - Assess side effects
+   - Evaluate effectiveness
+
+### Act
+1. Documentation
+   - Record final implementation
+   - Update relevant docs
+   - Note lessons learned
+   - Plan follow-up actions
+
+2. Process Improvement
+   - Identify process gaps
+   - Suggest improvements
+   - Update templates
+   - Share knowledge
+
+## Update Documentation Requirements
+
+### Issue Updates
+1. Status Changes
+   - Current state
+   - Progress made
+   - Blockers encountered
+   - Next steps
+
+2. Implementation Details
+   - Actual changes made
+   - Verification results
+   - Performance impact
+   - Side effects
+
+### Metrics Tracking
+1. Performance Metrics
+   - Before/after measurements
+   - Resource utilization
+   - Error rates
+   - Response times
+
+2. Quality Metrics
+   - Code coverage
+   - Complexity scores
+   - Technical debt
+   - Bug rates
+
+### Documentation Standards
+1. Code Changes
+   - Clear before/after examples
+   - Implementation notes
+   - Testing procedures
+   - Verification results
+
+2. Visual Documentation
+   - Updated diagrams
+   - Performance graphs
+   - Flow changes
+   - Architecture updates
+
+## Best Practices
+
+### Update Process
+1. Regular Updates
+   - Document changes promptly
+   - Track progress consistently
+   - Update metrics regularly
+   - Maintain history
+
+2. Quality Standards
+   - Verify all changes
+   - Document thoroughly
+   - Cross-reference issues
+   - Update related docs
+
+3. Communication
+   - Clear status updates
+   - Highlight blockers
+   - Share learnings
+   - Track decisions
+
+### Verification Methods
+1. Testing
+   - Unit tests
+   - Integration tests
+   - Performance tests
+   - Regression tests
+
+2. Code Review
+   - Peer review
+   - Static analysis
+   - Security scan
+   - Style check
+
+3. Validation
+   - Functional testing
+   - Load testing
+   - Error handling
+   - Edge cases
+
+## Update Integration
+
+### Review Integration
+1. Update original review
+2. Maintain chronological order
+3. Cross-reference related changes
+4. Track cumulative impact
+
+### Quality Gates
+1. Code complete
+2. Tests passing
+3. Review approved
+4. Docs updated
+
+### Final Verification
+1. Success criteria met
+2. No regressions
+3. Performance acceptable
+4. Documentation complete

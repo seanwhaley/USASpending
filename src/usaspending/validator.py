@@ -1,170 +1,186 @@
-"""Validation system using schema adapters."""
-from typing import Dict, Any, Optional, List, Set
+"""Validation system for data records."""
+from typing import Dict, Any, List, Optional, Set, Callable
 from dataclasses import dataclass, field
 from collections import defaultdict
-import logging
 
-from .schema_adapters import SchemaAdapterFactory, FieldAdapter
-from .schema_mapping import SchemaMapping
+from .interfaces import IValidationService, ISchemaAdapter, IDependencyManager
+from .logging_config import get_logger
 
-logger = logging.getLogger(__name__)
-
-@dataclass
-class ValidationResult:
-    """Result of a field validation."""
-    valid: bool
-    field_name: str
-    error_message: Optional[str] = None
-    error_type: Optional[str] = None
-    transformed_value: Optional[Any] = None
+logger = get_logger(__name__)
 
 @dataclass
-class ValidationStatistics:
-    """Statistics for validation operations."""
-    total: int = 0
-    valid: int = 0
-    invalid: int = 0
-    errors_by_type: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    errors_by_field: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
+class ValidationRule:
+    """Configuration for a validation rule."""
+    rule_type: str
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    error_message: str = ""
+    severity: str = "error"
+    dependencies: List[str] = field(default_factory=list)
 
-class Validator:
-    """Main validator using schema adapters."""
+class ValidationService(IValidationService):
+    """Validates data records using configured rules and adapters."""
     
-    def __init__(self, field_properties: Dict[str, Any]):
-        """Initialize validator with field property configuration."""
-        self.schema_mapping = SchemaMapping(field_properties)
-        self._required_fields: Set[str] = set()
-        self._cache: Dict[str, FieldAdapter] = {}
-        self.stats = ValidationStatistics()
+    def __init__(self, adapters: Dict[str, ISchemaAdapter], 
+                 dependency_manager: IDependencyManager):
+        """Initialize validation service."""
+        self.adapters = adapters
+        self.dependency_manager = dependency_manager
+        self.rules: Dict[str, List[ValidationRule]] = defaultdict(list)
+        self.stats: Dict[str, int] = defaultdict(int)
+        self.validation_errors: List[str] = []
         
-        # Initialize required fields from config
-        self._init_required_fields(field_properties)
-    
-    def _init_required_fields(self, config: Dict[str, Any]) -> None:
-        """Initialize set of required fields from configuration."""
-        for field_type, type_config in config.items():
-            for subtype, subtype_config in type_config.items():
-                if isinstance(subtype_config, dict):
-                    validation = subtype_config.get('validation', {})
-                    if validation.get('required', False):
-                        if 'fields' in subtype_config:
-                            self._required_fields.update(subtype_config['fields'])
-    
-    def validate_field(self, field_name: str, value: Any) -> ValidationResult:
-        """Validate a single field value."""
-        # Handle empty values for required fields
-        if self._is_empty_value(value):
-            if field_name in self._required_fields:
-                return ValidationResult(
-                    valid=False,
+    def add_rule(self, field_name: str, rule: ValidationRule) -> None:
+        """Add a validation rule for a field."""
+        self.rules[field_name].append(rule)
+        
+        # Register dependencies if any
+        if rule.dependencies:
+            for dep in rule.dependencies:
+                self.dependency_manager.add_dependency(
                     field_name=field_name,
-                    error_message=f"Required field '{field_name}' cannot be empty",
-                    error_type="required_field_empty"
+                    target_field=dep,
+                    dependency_type=rule.rule_type,
+                    validation_rule=rule.parameters
                 )
-            return ValidationResult(valid=True, field_name=field_name)
         
-        # Get adapter for field type
-        adapter = self._get_adapter(field_name)
-        if not adapter:
-            # No validation rules defined for this field
-            return ValidationResult(valid=True, field_name=field_name)
+    def validate_field(self, field_name: str, value: Any) -> List[str]:
+        """Validate a single field value."""
+        self.validation_errors.clear()
+        self.stats['total_field_validations'] += 1
         
-        # Validate and transform
-        is_valid, result = adapter.transform(value)
+        # Apply schema validation if adapter exists
+        if field_name in self.adapters:
+            adapter = self.adapters[field_name]
+            if not adapter.validate(value, field_name):
+                self.validation_errors.extend(adapter.get_validation_errors())
+                self.stats['schema_validation_errors'] += len(adapter.get_validation_errors())
         
-        # Update statistics
-        self.stats.total += 1
-        if is_valid:
-            self.stats.valid += 1
-            return ValidationResult(
-                valid=True,
-                field_name=field_name,
-                transformed_value=result
-            )
-        else:
-            self.stats.invalid += 1
-            self.stats.errors_by_field[field_name] += 1
-            error_type = "validation_error"
-            self.stats.errors_by_type[error_type] += 1
-            return ValidationResult(
-                valid=False,
-                field_name=field_name,
-                error_message=str(result),
-                error_type=error_type
-            )
-    
-    def validate_record(self, record: Dict[str, Any]) -> List[ValidationResult]:
-        """Validate all fields in a record."""
-        results = []
+        # Apply custom validation rules
+        for rule in self.rules.get(field_name, []):
+            if not self._validate_rule(value, rule):
+                if rule.error_message:
+                    self.validation_errors.append(rule.error_message)
+                self.stats['rule_validation_errors'] += 1
         
-        # Check for missing required fields
-        for field_name in self._required_fields:
+        return self.validation_errors.copy()
+        
+    def validate_record(self, record: Dict[str, Any]) -> List[str]:
+        """Validate an entire record."""
+        self.validation_errors.clear()
+        self.stats['total_record_validations'] += 1
+        
+        # Get validation order considering dependencies
+        validation_order = self.dependency_manager.get_validation_order()
+        
+        # Validate fields in order
+        for field_name in validation_order:
             if field_name not in record:
-                results.append(ValidationResult(
-                    valid=False,
-                    field_name=field_name,
-                    error_message=f"Required field '{field_name}' is missing",
-                    error_type="required_field_missing"
-                ))
-                self.stats.invalid += 1
-                self.stats.errors_by_field[field_name] += 1
-                self.stats.errors_by_type["required_field_missing"] += 1
+                continue
+                
+            # Validate dependencies first
+            dependency_errors = self.dependency_manager.validate_dependencies(record, self.adapters)
+            if dependency_errors:
+                self.validation_errors.extend(dependency_errors)
+                self.stats['dependency_validation_errors'] += len(dependency_errors)
+                continue
+            
+            # Validate the field itself
+            field_errors = self.validate_field(field_name, record[field_name])
+            if field_errors:
+                self.validation_errors.extend(field_errors)
         
-        # Validate present fields
-        for field_name, value in record.items():
-            result = self.validate_field(field_name, value)
-            if not result.valid:
-                results.append(result)
+        return self.validation_errors.copy()
         
-        return results
-    
-    def _is_empty_value(self, value: Any) -> bool:
-        """Check if a value is considered empty."""
-        if value is None:
+    def get_validation_stats(self) -> Dict[str, Any]:
+        """Get validation statistics."""
+        return dict(self.stats)
+        
+    def _validate_rule(self, value: Any, rule: ValidationRule) -> bool:
+        """Validate a value against a rule."""
+        try:
+            if rule.rule_type == "required":
+                return value is not None and str(value).strip() != ""
+                
+            elif rule.rule_type == "pattern":
+                import re
+                pattern = rule.parameters.get("pattern", "")
+                if not pattern:
+                    return True
+                return bool(re.match(pattern, str(value)))
+                
+            elif rule.rule_type == "range":
+                if value is None:
+                    return True
+                min_val = rule.parameters.get("min")
+                max_val = rule.parameters.get("max")
+                if min_val is not None and value < min_val:
+                    return False
+                if max_val is not None and value > max_val:
+                    return False
+                return True
+                
+            elif rule.rule_type == "length":
+                if value is None:
+                    return True
+                min_len = rule.parameters.get("min")
+                max_len = rule.parameters.get("max")
+                value_len = len(str(value))
+                if min_len is not None and value_len < min_len:
+                    return False
+                if max_len is not None and value_len > max_len:
+                    return False
+                return True
+                
+            elif rule.rule_type == "enum":
+                if value is None:
+                    return True
+                allowed_values = rule.parameters.get("values", [])
+                return value in allowed_values
+                
+            elif rule.rule_type == "custom":
+                validator = rule.parameters.get("validator")
+                if not validator or not callable(validator):
+                    return True
+                return validator(value)
+                
             return True
-        if isinstance(value, str) and not value.strip():
-            return True
-        return False
+            
+        except Exception as e:
+            logger.error(f"Validation error for rule {rule.rule_type}: {e}")
+            return False
+
+class ValidationServiceBuilder:
+    """Builder for creating configured ValidationService instances."""
     
-    def _get_adapter(self, field_name: str) -> Optional[FieldAdapter]:
-        """Get cached adapter for a field."""
-        if field_name not in self._cache:
-            adapter = self.schema_mapping.get_adapter_for_field(field_name)
-            if adapter:
-                self._cache[field_name] = adapter
-        return self._cache.get(field_name)
-    
-    def get_statistics(self) -> Dict[str, Any]:
-        """Get current validation statistics."""
-        return {
-            "total_validations": self.stats.total,
-            "valid_count": self.stats.valid,
-            "invalid_count": self.stats.invalid,
-            "validation_rate": (self.stats.valid / self.stats.total * 100 
-                              if self.stats.total > 0 else 0),
-            "errors_by_type": dict(self.stats.errors_by_type),
-            "errors_by_field": dict(self.stats.errors_by_field)
-        }
-    
-    def log_statistics(self) -> None:
-        """Log validation statistics."""
-        stats = self.get_statistics()
-        logger.info("Validation Statistics:")
-        logger.info(f"Total validations: {stats['total_validations']:,d}")
-        logger.info(f"Valid: {stats['valid_count']:,d} ({stats['validation_rate']:.1f}%)")
-        logger.info(f"Invalid: {stats['invalid_count']:,d}")
+    def __init__(self):
+        """Initialize builder."""
+        self.adapters: Dict[str, ISchemaAdapter] = {}
+        self.dependency_manager: Optional[IDependencyManager] = None
+        self.rules: Dict[str, List[ValidationRule]] = defaultdict(list)
         
-        if stats['errors_by_type']:
-            logger.info("\nErrors by type:")
-            for error_type, count in stats['errors_by_type'].items():
-                logger.info(f"  {error_type}: {count:,d}")
+    def with_adapter(self, field_name: str, adapter: ISchemaAdapter) -> 'ValidationServiceBuilder':
+        """Add schema adapter."""
+        self.adapters[field_name] = adapter
+        return self
         
-        if stats['errors_by_field']:
-            logger.info("\nErrors by field:")
-            for field_name, count in stats['errors_by_field'].items():
-                logger.info(f"  {field_name}: {count:,d}")
-    
-    def clear_cache(self) -> None:
-        """Clear the adapter cache."""
-        self._cache.clear()
-        self.schema_mapping.clear_cache()
+    def with_dependency_manager(self, manager: IDependencyManager) -> 'ValidationServiceBuilder':
+        """Set dependency manager."""
+        self.dependency_manager = manager
+        return self
+        
+    def with_rule(self, field_name: str, rule: ValidationRule) -> 'ValidationServiceBuilder':
+        """Add validation rule."""
+        self.rules[field_name].append(rule)
+        return self
+        
+    def build(self) -> ValidationService:
+        """Create ValidationService instance."""
+        if not self.dependency_manager:
+            raise ValueError("Dependency manager is required")
+            
+        service = ValidationService(self.adapters, self.dependency_manager)
+        for field_name, rules in self.rules.items():
+            for rule in rules:
+                service.add_rule(field_name, rule)
+                
+        return service

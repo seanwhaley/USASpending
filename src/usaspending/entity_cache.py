@@ -1,186 +1,144 @@
-"""Entity cache implementation using singleton pattern."""
-from typing import Dict, Any, Optional, Set, DefaultDict
-from collections import defaultdict
+"""Entity caching module."""
+from typing import Dict, Any, Optional, List, TypeVar, Generic
+import time
+from pathlib import Path
 
-class EntityStats:
-    """Track entity statistics."""
-    def __init__(self):
-        self.total = 0  # Total entities processed
-        self.unique = 0  # Unique entities stored
-        self.natural_keys_used = 0  # Keys generated from natural fields
-        self.hash_keys_used = 0  # Keys generated using hashing
-        self.skipped: Dict[str, int] = defaultdict(int)  # Counts of skipped entities by reason
-        self.relationships: Dict[str, int] = defaultdict(int)  # Counts by relationship type
+from .interfaces import IEntityCache, IEntitySerializer
+from .text_file_cache import TextFileCache
+from .exceptions import CacheError
+from .logging_config import get_logger
 
-class EntityCache:
-    """Singleton cache for storing entities."""
-    _instance = None
+logger = get_logger(__name__)
+
+T = TypeVar('T')
+
+class EntityCache(IEntityCache[T]):
+    """Cache for entity instances with serialization support."""
     
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._initialized = False
-        return cls._instance
-    
-    def __init__(self):
-        if self._initialized:
-            return
-        self._initialized = True
-        self.cache: Dict[str, Dict[str, Any]] = {}
-        self.stats = EntityStats()
-        self.pending_parents: Dict[str, Dict[str, Any]] = {}
-        self._entity_index: Dict[str, Set[str]] = defaultdict(set)  # Field value to entity key mapping
-
-    def add_entity(self, entity_key: str, entity_data: Dict[str, Any], is_update: bool = False) -> None:
-        """Add or update an entity in the cache.
+    def __init__(self, serializer: IEntitySerializer[T], 
+                 max_size: int = 1000, ttl_seconds: int = 300):
+        """Initialize entity cache.
         
         Args:
-            entity_key: Unique key for the entity
-            entity_data: Entity data to store
-            is_update: Whether this is an update to an existing entity
+            serializer: Entity serializer for cache storage
+            max_size: Maximum number of cached entries
+            ttl_seconds: Time to live in seconds for cache entries
         """
-        # Track statistics
-        self.stats.total += 1
-        if not is_update:
-            self.stats.unique += 1
-
-        # Remove old index entries if updating
-        if is_update and entity_key in self.cache:
-            self._remove_from_index(entity_key, self.cache[entity_key])
-
-        # Store entity data
-        self.cache[entity_key] = entity_data
-
-        # Update index
-        self._add_to_index(entity_key, entity_data)
-
-    def get_entity(self, entity_key: str) -> Optional[Dict[str, Any]]:
-        """Get entity data by key.
-        
-        Args:
-            entity_key: Key of entity to retrieve
-            
-        Returns:
-            Entity data if found, None otherwise
-        """
-        return self.cache.get(entity_key)
-
-    def find_entities(self, field: str, value: Any) -> Set[str]:
-        """Find entities by field value.
-        
-        Args:
-            field: Field to search
-            value: Value to search for
-            
-        Returns:
-            Set of entity keys matching the search
-        """
-        index_key = f"{field}:{value}"
-        return self._entity_index.get(index_key, set()).copy()
-
-    def update_entity(self, entity_key: str, updates: Dict[str, Any]) -> None:
-        """Update an existing entity.
-        
-        Args:
-            entity_key: Key of entity to update
-            updates: Fields to update
-        """
-        if entity_key in self.cache:
-            existing = self.cache[entity_key]
-            # Remove from index before update
-            self._remove_from_index(entity_key, existing)
-            # Update data
-            existing.update(updates)
-            # Re-index
-            self._add_to_index(entity_key, existing)
-        else:
-            self.add_entity(entity_key, updates)
-
-    def clear(self) -> None:
-        """Clear all cached data."""
-        self.cache.clear()
-        self._entity_index.clear()
-        self.pending_parents.clear()
-        self.stats = EntityStats()
-
-    def _add_to_index(self, entity_key: str, entity_data: Dict[str, Any]) -> None:
-        """Add entity to field value index.
-        
-        Args:
-            entity_key: Key of entity to index
-            entity_data: Entity data containing field values
-        """
-        for field, value in entity_data.items():
-            if isinstance(value, (str, int, float, bool)):
-                index_key = f"{field}:{value}"
-                self._entity_index[index_key].add(entity_key)
-
-    def _remove_from_index(self, entity_key: str, entity_data: Dict[str, Any]) -> None:
-        """Remove entity from field value index.
-        
-        Args:
-            entity_key: Key of entity to remove
-            entity_data: Entity data containing field values
-        """
-        for field, value in entity_data.items():
-            if isinstance(value, (str, int, float, bool)):
-                index_key = f"{field}:{value}"
-                self._entity_index[index_key].discard(entity_key)
-                # Clean up empty sets
-                if not self._entity_index[index_key]:
-                    del self._entity_index[index_key]
-
-    def add_skipped(self, reason: str) -> None:
-        """Track a skipped entity.
-        
-        Args:
-            reason: Reason entity was skipped
-        """
-        self.stats.skipped[reason] += 1
-
-    def add_relationship_count(self, rel_type: str) -> None:
-        """Track a relationship.
-        
-        Args:
-            rel_type: Type of relationship
-        """
-        self.stats.relationships[rel_type] += 1
-
-    def get_siblings(self, entity_key: str, field_name: str) -> Set[str]:
-        """Get entities sharing the same field value.
-        
-        Args:
-            entity_key: Key of entity to find siblings for
-            field_name: Field to check for shared values
-            
-        Returns:
-            Set of entity keys sharing the same field value
-        """
-        if entity_key in self.cache:
-            entity = self.cache[entity_key]
-            if field_name in entity:
-                value = entity[field_name]
-                index_key = f"{field_name}:{value}"
-                siblings = self._entity_index.get(index_key, set()).copy()
-                siblings.discard(entity_key)  # Exclude self
-                return siblings
-        return set()
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get current statistics.
-        
-        Returns:
-            Dictionary of statistics
-        """
-        return {
-            "total": self.stats.total,
-            "unique": self.stats.unique,
-            "natural_keys_used": self.stats.natural_keys_used,
-            "hash_keys_used": self.stats.hash_keys_used,
-            "skipped": dict(self.stats.skipped),
-            "relationships": dict(self.stats.relationships)
+        self.serializer = serializer
+        self.text_cache = TextFileCache(max_size, ttl_seconds)
+        self.entity_cache: Dict[str, Dict[str, Any]] = {}
+        self.stats = {
+            'entity_hits': 0,
+            'entity_misses': 0,
+            'deserialization_errors': 0,
+            'memory_cache_size': 0
         }
 
-def get_entity_cache() -> EntityCache:
-    """Get the global EntityCache instance."""
-    return EntityCache()
+    def get(self, key: str) -> Optional[T]:
+        """Get cached entity.
+        
+        Args:
+            key: Cache key
+            
+        Returns:
+            Cached entity or None if not found
+        """
+        try:
+            # Check memory cache first
+            if key in self.entity_cache:
+                self.stats['entity_hits'] += 1
+                return self.entity_cache[key]
+
+            # Try text cache
+            text_data = self.text_cache.get(key)
+            if text_data:
+                try:
+                    entity = self.serializer.from_json(text_data)
+                    self._cache_entity(key, entity)
+                    self.stats['entity_hits'] += 1
+                    return entity
+                except Exception as e:
+                    logger.error(f"Failed to deserialize entity for key {key}: {str(e)}")
+                    self.stats['deserialization_errors'] += 1
+                    return None
+
+            self.stats['entity_misses'] += 1
+            return None
+
+        except Exception as e:
+            logger.error(f"Error retrieving entity for key {key}: {str(e)}")
+            return None
+
+    def put(self, key: str, entity: T) -> None:
+        """Cache entity instance.
+        
+        Args:
+            key: Cache key
+            entity: Entity to cache
+        """
+        try:
+            # Serialize entity
+            text_data = self.serializer.to_json(entity)
+            
+            # Store in text cache first
+            self.text_cache.put(key, text_data)
+            
+            # Then cache in memory
+            self._cache_entity(key, entity)
+
+        except Exception as e:
+            logger.error(f"Failed to cache entity for key {key}: {str(e)}")
+            raise CacheError(f"Failed to cache entity: {str(e)}")
+
+    def remove(self, key: str) -> None:
+        """Remove entity from cache.
+        
+        Args:
+            key: Cache key to remove
+        """
+        try:
+            # Remove from both caches
+            if key in self.entity_cache:
+                del self.entity_cache[key]
+                self.stats['memory_cache_size'] = len(self.entity_cache)
+                
+            self.text_cache.remove(key)
+
+        except Exception as e:
+            logger.error(f"Error removing cached entity for key {key}: {str(e)}")
+            raise CacheError(f"Failed to remove cached entity: {str(e)}")
+
+    def clear(self) -> None:
+        """Clear all cached entities."""
+        try:
+            self.entity_cache.clear()
+            self.text_cache.clear()
+            self.stats['memory_cache_size'] = 0
+            self.stats['entity_hits'] = 0
+            self.stats['entity_misses'] = 0
+            self.stats['deserialization_errors'] = 0
+
+        except Exception as e:
+            logger.error(f"Error clearing entity cache: {str(e)}")
+            raise CacheError(f"Failed to clear entity cache: {str(e)}")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics.
+        
+        Returns:
+            Dictionary of cache statistics
+        """
+        stats = self.stats.copy()
+        stats['text_cache'] = self.text_cache.get_stats()
+        stats['memory_cache_size'] = len(self.entity_cache)
+        return stats
+
+    def _cache_entity(self, key: str, entity: T) -> None:
+        """Cache entity in memory.
+        
+        Args:
+            key: Cache key
+            entity: Entity to cache
+        """
+        self.entity_cache[key] = entity
+        self.stats['memory_cache_size'] = len(self.entity_cache)

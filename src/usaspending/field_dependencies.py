@@ -1,263 +1,264 @@
-"""Field dependency management system."""
-from typing import Dict, Any, Set, List, Union, Tuple, Optional
-import logging
+"""System for managing field dependencies and validation order."""
+from typing import Dict, Any, List, Set, Optional, Tuple
+from dataclasses import dataclass
 from collections import defaultdict
-from copy import deepcopy
+import networkx as nx
 
-logger = logging.getLogger(__name__)
+from .interfaces import IDependencyManager, ISchemaAdapter
+from .logging_config import get_logger
 
-class FieldDependency:
-    """Represents a dependency between fields."""
-    
-    def __init__(self, field_name: str, target_field: Union[str, Tuple[str, ...], None], dependency_type: str,
-                 validation_rule: Optional[Dict[str, Any]] = None):
-        """Initialize field dependency."""
-        self.field_name = field_name
-        self.target_field = target_field if isinstance(target_field, tuple) else target_field
-        self.dependency_type = dependency_type
-        self.validation_rule = validation_rule
+logger = get_logger(__name__)
 
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, FieldDependency):
-            return NotImplemented
-        return (self.field_name == other.field_name and
-                self.target_field == other.target_field and
-                self.dependency_type == other.dependency_type)
+@dataclass
+class Dependency:
+    """Represents a field dependency."""
+    field_name: str
+    target_field: str
+    dependency_type: str
+    validation_rule: Dict[str, Any]
+    error_level: str = "error"
 
-    def __hash__(self) -> int:
-        # Fix: Handle None target_field values
-        if self.target_field is None:
-            target = None
-        elif isinstance(self.target_field, str):
-            target = self.target_field
-        else:
-            target = tuple(sorted(self.target_field))
-        return hash((self.field_name, target, self.dependency_type))
-
-    def __repr__(self) -> str:
-        return f"FieldDependency(field={self.field_name}, target={self.target_field}, type={self.dependency_type})"
-
-class FieldDependencyManager:
-    """Manages field dependencies and their validation ordering."""
+class DependencyManager(IDependencyManager):
+    """Manages field dependencies and validation order."""
     
     def __init__(self):
         """Initialize dependency manager."""
-        self._dependencies: Dict[str, Set[FieldDependency]] = defaultdict(set)
-        self._validation_order: Optional[List[str]] = None
-    
-    @property
-    def dependencies(self) -> Dict[str, Set[FieldDependency]]:
-        """Get all dependencies."""
-        return self._dependencies
-
-    def clear_dependencies(self) -> None:
-        """Clear all dependencies."""
-        self._dependencies.clear()
-        self._validation_order = None
+        self.dependencies: Dict[str, List[Dependency]] = defaultdict(list)
+        self.validation_order: Optional[List[str]] = None
+        self.validation_graph: Optional[nx.DiGraph] = None
         
-    def add_dependency(self, field_name: str, target_field: Union[str, Tuple[str, ...]], 
-                      dependency_type: str, validation_rule: Optional[Dict[str, Any]] = None) -> None:
-        """Add a field dependency."""
-        dep = FieldDependency(field_name, target_field, dependency_type, validation_rule)
-        self._dependencies[field_name].add(dep)
-        self._validation_order = None
+    def add_dependency(self, field_name: str, target_field: str,
+                      dependency_type: str, validation_rule: Dict[str, Any]) -> None:
+        """Add field dependency."""
+        dependency = Dependency(
+            field_name=field_name,
+            target_field=target_field,
+            dependency_type=dependency_type,
+            validation_rule=validation_rule
+        )
         
-    def get_dependencies(self, field_name: str) -> List[FieldDependency]:
-        """Get dependencies for a field."""
-        return list(self._dependencies.get(field_name, set()))
-        
-    def remove_dependency(self, field_name: str, target_field: str, dependency_type: str) -> None:
-        """Remove a specific dependency."""
-        if field_name in self._dependencies:
-            self._dependencies[field_name] = {
-                dep for dep in self._dependencies[field_name]
-                if not (dep.target_field == target_field and dep.dependency_type == dependency_type)
-            }
-            if not self._dependencies[field_name]:
-                del self._dependencies[field_name]
-            self._validation_order = None
-
-    def get_dependency_graph(self) -> Dict[str, Set[Tuple[str, str]]]:
-        """Get dependency graph representation."""
-        graph = defaultdict(set)
-        for field, deps in self._dependencies.items():
-            for dep in deps:
-                if isinstance(dep.target_field, str):
-                    graph[field].add((dep.target_field, dep.dependency_type))
-                else:
-                    for t in dep.target_field:
-                        graph[field].add((t, dep.dependency_type))
-        return dict(graph)
-            
-    def has_circular_dependency(self, start_field: Optional[str] = None) -> bool:
-        """Check for circular dependencies in the graph."""
-        visited = set()
-        path = set()
-        
-        def visit(field: str) -> bool:
-            if field in path:
-                cycle = list(path) + [field]
-                start_idx = cycle.index(field)
-                logger.error(f"Circular dependency detected: {' -> '.join(cycle[start_idx:])}")
-                return True
-            if field in visited:
-                return False
-                
-            visited.add(field)
-            path.add(field)
-            
-            for dep in self._dependencies.get(field, set()):
-                target = dep.target_field
-                if isinstance(target, tuple):
-                    for t in target:
-                        if visit(t):
-                            return True
-                else:
-                    if visit(target):
-                        return True
-                        
-            path.remove(field)
-            return False
-
-        if start_field:
-            # For specific field check, return False if field doesn't exist
-            if start_field not in self._dependencies:
-                return False
-            return visit(start_field)
-            
-        for field in self._dependencies:
-            if visit(field):
-                return True
-        return False
+        self.dependencies[field_name].append(dependency)
+        # Invalidate cached order
+        self.validation_order = None
+        self.validation_graph = None
         
     def get_validation_order(self) -> List[str]:
-        """Get field validation order using topological sort."""
-        if self._validation_order is not None:
-            return self._validation_order
-            
-        # Check for circular dependencies first
-        if self.has_circular_dependency():
-            raise ValueError("Circular dependency detected")
-            
-        try:
-            return self._compute_validation_order()
-        except ValueError as e:
-            logger.error(f"Error computing validation order: {str(e)}")
-            return self._compute_fallback_order()
-            
-    def _compute_validation_order(self) -> List[str]:
-        """Compute validation order using topological sort."""
-        # Get all nodes (fields) in the graph
-        all_nodes = set(self._dependencies.keys())
-        for deps in self._dependencies.values():
-            for dep in deps:
-                if isinstance(dep.target_field, tuple):
-                    all_nodes.update(dep.target_field)
-                else:
-                    all_nodes.add(dep.target_field)
-
-        result = []
-        in_degree = defaultdict(int)
-        graph = defaultdict(set)
+        """Get ordered list of fields for validation."""
+        if self.validation_order is None:
+            self._compute_validation_order()
+        return self.validation_order or []
         
-        # Build graph and calculate in-degrees
-        for field, deps in self._dependencies.items():
-            for dep in deps:
-                target = dep.target_field
-                if isinstance(target, tuple):
-                    for t in target:
-                        graph[t].add(field)
-                        in_degree[field] += 1
-                else:
-                    graph[target].add(field)
-                    in_degree[field] += 1
-                    
-        # Start with nodes that have no dependencies (including isolated nodes)
-        queue = [node for node in all_nodes if in_degree[node] == 0]
+    def validate_dependencies(self, record: Dict[str, Any],
+                          adapters: Dict[str, ISchemaAdapter]) -> List[str]:
+        """Validate field dependencies."""
+        errors: List[str] = []
         
-        while queue:
-            field = queue.pop(0)
-            if field not in result:  # Avoid duplicates
-                result.append(field)
-            
-            for dependent in graph[field]:
-                in_degree[dependent] -= 1
-                if in_degree[dependent] == 0:
-                    queue.append(dependent)
-
-        # Check if all nodes are included
-        if len(result) != len(all_nodes):
-            raise ValueError("Circular dependency detected")
-            
-        self._validation_order = result
-        return result
+        # Ensure validation order is computed
+        validation_order = self.get_validation_order()
         
-    def _compute_fallback_order(self) -> List[str]:
-        """Compute a fallback validation order when topological sort fails."""
-        logger.warning("Using fallback validation order due to circular dependencies")
-        all_nodes = set()
-        # Include all fields involved in dependencies
-        for field, deps in self._dependencies.items():
-            all_nodes.add(field)
-            for dep in deps:
-                if isinstance(dep.target_field, tuple):
-                    all_nodes.update(dep.target_field)
-                else:
-                    all_nodes.add(dep.target_field)
-        return sorted(list(all_nodes))
+        # Track validated fields and their values
+        validated_fields: Dict[str, Any] = {}
         
-    def _process_field_properties(self, field_properties: Dict[str, Any]) -> None:
-        """Process field properties to extract dependencies and transformations."""
-        for field_name, props in field_properties.items():
-            if not isinstance(props, dict):
+        # Validate fields in order
+        for field_name in validation_order:
+            if field_name not in record:
                 continue
                 
-            # Handle validation dependencies
-            validation = props.get('validation', {})
-            if 'dependencies' in validation:
-                deps = validation['dependencies']
-                if isinstance(deps, (list, tuple)):
-                    for dep in deps:
-                        if isinstance(dep, dict) and 'target_field' in dep:
-                            self.add_dependency(
-                                field_name=field_name,
-                                target_field=dep['target_field'],
-                                dependency_type=dep.get('type', 'required'),
-                                validation_rule=dep.get('validation_rule')
-                            )
-                elif isinstance(deps, str):
-                    self.add_dependency(field_name, deps, 'required')
-
-            # Handle transformation dependencies
-            transformation = props.get('transformation', {})
+            field_value = record[field_name]
+            field_dependencies = self.dependencies.get(field_name, [])
             
-            # Handle single transformation
-            if isinstance(transformation, dict):
-                if 'source_field' in transformation:
-                    self.add_dependency(
-                        field_name=field_name,
-                        target_field=transformation['source_field'],
-                        dependency_type='transformation'
+            # Check dependencies
+            for dep in field_dependencies:
+                if not self._validate_dependency(
+                    dep, field_value, validated_fields, adapters):
+                    errors.append(
+                        f"Field {field_name} failed dependency validation: "
+                        f"depends on {dep.target_field} ({dep.dependency_type})"
                     )
-                # Handle operations list
-                operations = transformation.get('operations', [])
-                if isinstance(operations, list):
-                    for op in operations:
-                        if isinstance(op, dict) and 'source_field' in op:
-                            self.add_dependency(
-                                field_name=field_name,
-                                target_field=op['source_field'],
-                                dependency_type='transformation'
-                            )
-
-    @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> 'FieldDependencyManager':
-        """Create dependency manager from configuration."""
-        manager = cls()
-        if not config:
-            return manager
+                    if dep.error_level == "error":
+                        return errors
+                        
+            # Store validated value
+            validated_fields[field_name] = field_value
             
-        if 'field_properties' in config:
-            manager._process_field_properties(config['field_properties'])
+        return errors
+        
+    def _validate_dependency(self, dependency: Dependency,
+                           field_value: Any,
+                           validated_fields: Dict[str, Any],
+                           adapters: Dict[str, ISchemaAdapter]) -> bool:
+        """Validate a single dependency."""
+        target_value = validated_fields.get(dependency.target_field)
+        
+        if target_value is None:
+            # Target field not present or not yet validated
+            return False
             
-        return manager
+        if dependency.dependency_type == "required_if":
+            # Field required if target matches condition
+            condition_value = dependency.validation_rule.get("equals")
+            if target_value == condition_value and field_value is None:
+                return False
+                
+        elif dependency.dependency_type == "required_unless":
+            # Field required unless target matches condition
+            condition_value = dependency.validation_rule.get("equals")
+            if target_value != condition_value and field_value is None:
+                return False
+                
+        elif dependency.dependency_type == "equals":
+            # Field must equal target
+            if field_value != target_value:
+                return False
+                
+        elif dependency.dependency_type == "not_equals":
+            # Field must not equal target
+            if field_value == target_value:
+                return False
+                
+        elif dependency.dependency_type == "greater_than":
+            # Field must be greater than target
+            try:
+                if not (isinstance(field_value, (int, float)) and
+                       isinstance(target_value, (int, float)) and
+                       field_value > target_value):
+                    return False
+            except (TypeError, ValueError):
+                return False
+                
+        elif dependency.dependency_type == "less_than":
+            # Field must be less than target
+            try:
+                if not (isinstance(field_value, (int, float)) and
+                       isinstance(target_value, (int, float)) and
+                       field_value < target_value):
+                    return False
+            except (TypeError, ValueError):
+                return False
+                
+        elif dependency.dependency_type == "custom":
+            # Custom validation rule
+            adapter = adapters.get(dependency.target_field)
+            if adapter:
+                return adapter.validate(field_value, dependency.field_name)
+                
+        return True
+        
+    def _compute_validation_order(self) -> None:
+        """Compute field validation order using topological sort."""
+        # Build dependency graph
+        graph = nx.DiGraph()
+        
+        # Add all fields as nodes
+        fields: Set[str] = set()
+        for field_name, deps in self.dependencies.items():
+            fields.add(field_name)
+            fields.update(d.target_field for d in deps)
+            
+        for field in fields:
+            graph.add_node(field)
+            
+        # Add dependency edges
+        for field_name, deps in self.dependencies.items():
+            for dep in deps:
+                # Edge from target to dependent field
+                graph.add_edge(dep.target_field, field_name)
+                
+        try:
+            # Compute order using topological sort
+            order = list(nx.topological_sort(graph))
+            
+            # Store results
+            self.validation_order = order
+            self.validation_graph = graph
+            
+        except nx.NetworkXUnfeasible:
+            logger.error("Circular dependencies detected in validation rules")
+            # Use arbitrary order if cycle detected
+            self.validation_order = sorted(fields)
+            self.validation_graph = graph
+            
+    def get_field_dependencies(self, field_name: str) -> List[Dependency]:
+        """Get dependencies for a field."""
+        return self.dependencies.get(field_name, []).copy()
+        
+    def get_dependent_fields(self, field_name: str) -> List[str]:
+        """Get fields that depend on the given field."""
+        if self.validation_graph is None:
+            self._compute_validation_order()
+            
+        if not self.validation_graph or field_name not in self.validation_graph:
+            return []
+            
+        return [
+            node for node in self.validation_graph.successors(field_name)
+        ]
+        
+    def clear_dependencies(self) -> None:
+        """Clear all dependencies."""
+        self.dependencies.clear()
+        self.validation_order = None
+        self.validation_graph = None
+        
+    def get_dependency_groups(self) -> List[Set[str]]:
+        """Get groups of mutually dependent fields."""
+        if self.validation_graph is None:
+            self._compute_validation_order()
+            
+        if not self.validation_graph:
+            return []
+            
+        # Find strongly connected components
+        return [set(group) for group in
+                nx.strongly_connected_components(self.validation_graph)]
+        
+    def is_circular_dependency(self, field_name: str,
+                             target_field: str) -> bool:
+        """Check if adding dependency would create cycle."""
+        if self.validation_graph is None:
+            self._compute_validation_order()
+            
+        if not self.validation_graph:
+            return False
+            
+        # Check if target already depends on field
+        try:
+            return nx.has_path(self.validation_graph,
+                             field_name, target_field)
+        except nx.NetworkXError:
+            return False
+            
+    def analyze_dependencies(self) -> Dict[str, Any]:
+        """Analyze dependency structure."""
+        if self.validation_graph is None:
+            self._compute_validation_order()
+            
+        if not self.validation_graph:
+            return {}
+            
+        analysis = {
+            "total_fields": len(self.validation_graph),
+            "dependency_groups": len(self.get_dependency_groups()),
+            "max_depth": 0,
+            "fields_by_depth": defaultdict(list),
+            "bottlenecks": []
+        }
+        
+        # Compute depth for each field
+        for field in self.validation_graph.nodes():
+            depth = len(nx.ancestors(self.validation_graph, field))
+            analysis["fields_by_depth"][depth].append(field)
+            analysis["max_depth"] = max(analysis["max_depth"], depth)
+            
+        # Find bottleneck fields
+        for field in self.validation_graph.nodes():
+            successors = set(nx.descendants(self.validation_graph, field))
+            predecessors = set(nx.ancestors(self.validation_graph, field))
+            if len(successors) > 2 and len(predecessors) > 2:
+                analysis["bottlenecks"].append({
+                    "field": field,
+                    "dependencies": len(predecessors),
+                    "dependents": len(successors)
+                })
+                
+        return analysis

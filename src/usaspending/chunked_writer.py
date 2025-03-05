@@ -1,265 +1,251 @@
-"""Chunked data writer with optimized processing."""
-from typing import Dict, Any, Optional, List, Set
-from datetime import datetime
-import os
-import json
-from pathlib import Path
+"""Chunked writing system for efficient batch processing of entities."""
+from typing import Dict, Any, List, Optional, Iterator, Generic, TypeVar
+from abc import ABC, abstractmethod
+import threading
+from queue import Queue, Empty
+from concurrent.futures import ThreadPoolExecutor
+import time
 
-from .field_selector import FieldSelector
+from .interfaces import IEntityStore, IEntitySerializer
 from .logging_config import get_logger
-from .types import ChunkInfo
-from .utils import TypeConverter
-from .validation import ValidationEngine
-from .exceptions import ChunkingError
 
 logger = get_logger(__name__)
 
-class ChunkedWriter:
-    """Manages writing records in chunks with optimized batching and error handling."""
+T = TypeVar('T')
+
+class IChunkedWriter(ABC, Generic[T]):
+    """Interface for chunked writing operations."""
     
-    def __init__(self, base_path: str, config: Dict[str, Any], output_dir: str = None, field_selector: Optional[FieldSelector] = None, chunk_size: Optional[int] = None) -> None:
-        """Initialize chunked writer with configuration."""
-        self.base_path = Path(base_path)
-        self.config = config
-        self.field_selector = field_selector
-        self.output_dir = Path(output_dir) if output_dir else self.base_path.parent
-        
-        # Initialize settings from config
-        self._init_config()
-        self._init_validation()
-        self._init_fields()
-        
-        # Processing state
-        self.current_chunk = 1
-        self.buffer: List[Dict[str, Any]] = []
-        self.total_records = 0
-        self.chunks_info: List[ChunkInfo] = []
-        
-    def _init_config(self) -> None:
-        """Initialize configuration settings."""
-        # Use system.io settings for file configuration
-        io_config = self.config.get('system', {}).get('io', {})
-        if not io_config:
-            raise ChunkingError("Missing system.io configuration section")
-            
-        # Use system.processing for processing settings
-        proc_config = self.config.get('system', {}).get('processing', {})
-        if not proc_config:
-            raise ChunkingError("Missing system.processing configuration section")
-        
-        # Core settings
-        self.chunk_size = self._get_chunk_size(proc_config)
-        self.max_chunk_size_mb = proc_config.get('max_chunk_size_mb', 100)
-        self.batch_size = io_config.get('input', {}).get('batch_size', 1000)
-        
-        # File format settings from system.formats
-        formats_config = self.config.get('system', {}).get('formats', {})
-        json_config = formats_config.get('json', {})
-        self.json_indent = json_config.get('indent', 2)
-        self.json_ensure_ascii = json_config.get('ensure_ascii', False)
-        self.encoding = formats_config.get('csv', {}).get('encoding', 'utf-8-sig')
-        
-    def _get_chunk_size(self, proc_config: Dict[str, Any]) -> int:
-        """Get chunk size from config or override."""
-        chunk_size = proc_config.get('records_per_chunk')
-        if not chunk_size:
-            raise ChunkingError("records_per_chunk required in system.processing config")
-        return chunk_size
-        
-    def _init_validation(self) -> None:
-        """Initialize validation if enabled."""
-        self.validator = None
-        input_config = self.config.get('system', {}).get('io', {}).get('input', {})
-        if input_config.get('validate_input', True):
-            self.validator = ValidationEngine(self.config)
-            logger.debug("Validation engine initialized for ChunkedWriter")
-            
-            # Initialize validation for chunking specifically
-            try:
-                if hasattr(self.validator, 'validate_chunk_config'):
-                    result = self.validator.validate_chunk_config()
-                    if not result.valid:
-                        raise ChunkingError(f"Chunk configuration error: {result.message}")
-            except AttributeError:
-                logger.warning("Chunk configuration validation not available")
-
-    def _init_fields(self) -> None:
-        """Initialize field tracking."""
-        self.keep_fields = self._collect_essential_fields()
-        self.excluded_fields = self._build_excluded_fields()
-        
-        if not self.keep_fields:
-            raise ChunkingError("No essential fields (key_fields) found in entity configurations")
-            
-    def _collect_essential_fields(self) -> Set[str]:
-        """Collect essential fields from configuration."""
-        fields = set()
-        
-        for section_data in self.config.values():
-            if not isinstance(section_data, dict):
-                continue
-                
-            # Add key fields
-            if 'key_fields' in section_data:
-                fields.update(section_data['key_fields'])
-            
-            # Add mapped fields
-            if 'field_mappings' in section_data:
-                for mapped_field in section_data['field_mappings'].values():
-                    if isinstance(mapped_field, str):
-                        fields.add(mapped_field)
-                    elif isinstance(mapped_field, list):
-                        fields.update(mapped_field)
-                        
-        return fields
-        
-    def _build_excluded_fields(self) -> Set[str]:
-        """Build set of fields to exclude from processed records."""
-        excluded = set()
-        
-        # Get exclusions from system config
-        pattern_exceptions = (self.config.get('system', {})
-                            .get('io', {})
-                            .get('input', {})
-                            .get('field_pattern_exceptions', []))
-        
-        for cfg in self.config.values():
-            if not isinstance(cfg, dict):
-                continue
-                
-            # Handle field mappings
-            if 'field_mappings' in cfg:
-                for source_field in cfg['field_mappings'].values():
-                    if isinstance(source_field, str):
-                        if source_field not in self.keep_fields:
-                            excluded.add(source_field)
-                    elif isinstance(source_field, list):
-                        excluded.update(f for f in source_field if f not in self.keep_fields)
-                        
-            # Handle field patterns
-            if 'field_patterns' in cfg:
-                excluded.update(pattern for pattern in cfg['field_patterns']
-                              if pattern not in pattern_exceptions)
-                              
-            # Handle explicit exclusions
-            if 'exclude_fields' in cfg:
-                excluded.update(cfg['exclude_fields'])
-                
-        return excluded
-
-    def add_record(self, record: Dict[str, Any]) -> None:
-        """Add a record to the buffer, writing chunk if buffer is full."""
-        self.buffer.append(self.clean_record_for_chunk(record))
-        if len(self.buffer) >= self.chunk_size:
-            self.write_records()
-            
-    def clean_record_for_chunk(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        """Clean record for chunking by removing excluded fields."""
-        if self.validator:
-            return self.validator.validate_clean_record(record, self.keep_fields, self.excluded_fields)
-            
-        # Fallback when validation is disabled
-        return {
-            key: value for key, value in record.items()
-            if (key in self.keep_fields or
-                not any(key.startswith(pattern) for pattern in self.excluded_fields) or
-                key.endswith('_ref'))
-        }
-
-    def write_records(self) -> None:
-        """Write buffered records to chunk file with atomic operations."""
-        if not self.buffer:
-            return
-            
-        chunk_file = self.base_path.with_suffix(f'.part{self.current_chunk}.json')
-        temp_file = chunk_file.with_suffix('.tmp')
-        backup_file = chunk_file.with_suffix('.bak')
-        
-        try:
-            chunk_data = {
-                "metadata": {
-                    "chunk_number": self.current_chunk,
-                    "record_count": len(self.buffer),
-                    "generated_date": datetime.now().isoformat()
-                },
-                "records": self.buffer
-            }
-            
-            # Ensure output directory exists
-            self.base_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Backup existing chunk
-            if chunk_file.exists():
-                chunk_file.replace(backup_file)
-            
-            # Write atomically using temporary file
-            temp_file.write_text(
-                json.dumps(chunk_data, indent=self.json_indent, ensure_ascii=self.json_ensure_ascii),
-                encoding=self.encoding
-            )
-            temp_file.replace(chunk_file)
-            
-            # Update tracking
-            self.chunks_info.append(ChunkInfo(
-                file=str(chunk_file),
-                record_count=len(self.buffer),
-                chunk_number=self.current_chunk
-            ))
-            
-            self.total_records += len(self.buffer)
-            self.current_chunk += 1
-            self.buffer = []
-            
-            # Clean up backup
-            if backup_file.exists():
-                backup_file.unlink()
-                
-        except Exception as e:
-            logger.error(f"Error writing chunk {self.current_chunk}: {str(e)}")
-            # Restore from backup if available
-            if backup_file.exists():
-                backup_file.replace(chunk_file)
-            raise ChunkingError(f"Failed to write chunk {self.current_chunk}: {str(e)}")
-
-    def write_index(self) -> None:
-        """Write index file with chunk metadata."""
-        index_file = self.base_path.with_suffix('_index.json')
-        temp_file = index_file.with_suffix('.tmp')
-        
-        try:
-            index_data = {
-                "metadata": {
-                    "total_records": self.total_records,
-                    "total_chunks": len(self.chunks_info),
-                    "generated_date": datetime.now().isoformat()
-                },
-                "chunks": [
-                    {
-                        "file": os.path.basename(chunk.file),
-                        "record_count": chunk.record_count,
-                        "chunk_number": chunk.chunk_number
-                    }
-                    for chunk in self.chunks_info
-                ]
-            }
-            
-            # Write atomically
-            temp_file.write_text(
-                json.dumps(index_data, indent=self.json_indent, ensure_ascii=self.json_ensure_ascii),
-                encoding=self.encoding
-            )
-            temp_file.replace(index_file)
-            
-        except Exception as e:
-            logger.error(f"Error writing index file: {str(e)}")
-            raise ChunkingError(f"Failed to write index file: {str(e)}")
-
+    @abstractmethod
+    def write_chunk(self, entities: List[T]) -> bool:
+        """Write a chunk of entities."""
+        pass
+    
+    @abstractmethod
+    def flush(self) -> None:
+        """Flush any buffered entities."""
+        pass
+    
+    @abstractmethod
     def get_stats(self) -> Dict[str, Any]:
-        """Get chunking statistics."""
-        return {
-            "total_records": self.total_records,
-            "total_chunks": len(self.chunks_info),
-            "current_chunk": self.current_chunk,
-            "buffer_size": len(self.buffer),
-            "chunk_size": self.chunk_size
+        """Get writing statistics."""
+        pass
+
+class ChunkedWriter(IChunkedWriter[T]):
+    """Processes and writes entities in chunks."""
+    
+    def __init__(self, store: IEntityStore[T], serializer: IEntitySerializer[T],
+                 chunk_size: int = 1000, max_retries: int = 3,
+                 worker_threads: int = 4):
+        """Initialize writer with store and configuration."""
+        self.store = store
+        self.serializer = serializer
+        self.chunk_size = chunk_size
+        self.max_retries = max_retries
+        self.worker_threads = worker_threads
+        
+        self.buffer: List[T] = []
+        self.stats: Dict[str, int] = {
+            'total_entities': 0,
+            'successful_writes': 0,
+            'failed_writes': 0,
+            'retries': 0,
+            'chunks_processed': 0
         }
+        self._lock = threading.Lock()
+        self._queue: Queue[List[T]] = Queue()
+        self._executor = ThreadPoolExecutor(max_workers=worker_threads)
+        self._processing = False
+        
+    def write_chunk(self, entities: List[T]) -> bool:
+        """Write a chunk of entities."""
+        if not entities:
+            return True
+            
+        with self._lock:
+            self.stats['total_entities'] += len(entities)
+            
+        # Add to buffer
+        self.buffer.extend(entities)
+        
+        # Process buffer if it reaches chunk size
+        if len(self.buffer) >= self.chunk_size:
+            return self._process_buffer()
+            
+        return True
+        
+    def flush(self) -> None:
+        """Flush any remaining entities in buffer."""
+        if self.buffer:
+            self._process_buffer()
+            
+        # Wait for all processing to complete
+        self._wait_for_processing()
+        
+    def get_stats(self) -> Dict[str, Any]:
+        """Get writing statistics."""
+        with self._lock:
+            stats = dict(self.stats)
+            
+        # Calculate success rate
+        total = stats['successful_writes'] + stats['failed_writes']
+        if total > 0:
+            stats['success_rate'] = round(
+                (stats['successful_writes'] / total) * 100, 2
+            )
+            
+        return stats
+        
+    def _process_buffer(self) -> bool:
+        """Process current buffer."""
+        if not self.buffer:
+            return True
+            
+        # Prepare chunk for processing
+        chunk = self.buffer[:self.chunk_size]
+        self.buffer = self.buffer[self.chunk_size:]
+        
+        # Add to processing queue
+        self._queue.put(chunk)
+        
+        # Start processing if not already running
+        if not self._processing:
+            self._start_processing()
+            
+        return True
+        
+    def _start_processing(self) -> None:
+        """Start background processing of chunks."""
+        self._processing = True
+        self._executor.submit(self._process_queue)
+        
+    def _process_queue(self) -> None:
+        """Process chunks from queue."""
+        while True:
+            try:
+                # Get next chunk with timeout
+                chunk = self._queue.get(timeout=1.0)
+            except Empty:
+                # Stop if queue is empty
+                self._processing = False
+                break
+                
+            try:
+                self._write_chunk_with_retry(chunk)
+            finally:
+                self._queue.task_done()
+                
+    def _write_chunk_with_retry(self, chunk: List[T]) -> None:
+        """Write chunk with retry logic."""
+        retry_count = 0
+        success = False
+        
+        while retry_count < self.max_retries and not success:
+            try:
+                # Process each entity in chunk
+                for entity in chunk:
+                    # Serialize if needed
+                    if hasattr(entity, '__dict__'):
+                        data = self.serializer.to_dict(entity)
+                    else:
+                        data = entity
+                        
+                    # Save to store
+                    entity_id = self.store.save(
+                        self.serializer.entity_type,
+                        data
+                    )
+                    
+                    if entity_id:
+                        with self._lock:
+                            self.stats['successful_writes'] += 1
+                    else:
+                        with self._lock:
+                            self.stats['failed_writes'] += 1
+                            
+                success = True
+                
+            except Exception as e:
+                retry_count += 1
+                with self._lock:
+                    self.stats['retries'] += 1
+                    
+                if retry_count >= self.max_retries:
+                    logger.error(
+                        f"Failed to write chunk after {retry_count} retries: {e}"
+                    )
+                    with self._lock:
+                        self.stats['failed_writes'] += len(chunk)
+                else:
+                    time.sleep(0.1 * (2 ** retry_count))  # Exponential backoff
+                    
+        with self._lock:
+            self.stats['chunks_processed'] += 1
+            
+    def _wait_for_processing(self) -> None:
+        """Wait for all processing to complete."""
+        self._queue.join()
+        self._executor.shutdown(wait=True)
+
+class AsyncChunkedWriter(IChunkedWriter[T]):
+    """Asynchronous chunked writer implementation."""
+    
+    def __init__(self, writer: ChunkedWriter[T]):
+        """Initialize with base writer."""
+        self.writer = writer
+        self._write_thread: Optional[threading.Thread] = None
+        self._queue: Queue[List[T]] = Queue()
+        self._stop_event = threading.Event()
+        
+    def write_chunk(self, entities: List[T]) -> bool:
+        """Asynchronously write chunk of entities."""
+        if not entities:
+            return True
+            
+        # Start writer thread if not running
+        if not self._write_thread or not self._write_thread.is_alive():
+            self._start_writer_thread()
+            
+        # Add to queue
+        self._queue.put(entities)
+        return True
+        
+    def flush(self) -> None:
+        """Flush pending writes and stop processing."""
+        # Signal stop
+        self._stop_event.set()
+        
+        # Wait for processing to complete
+        if self._write_thread and self._write_thread.is_alive():
+            self._write_thread.join()
+            
+        # Flush base writer
+        self.writer.flush()
+        
+    def get_stats(self) -> Dict[str, Any]:
+        """Get writing statistics."""
+        stats = self.writer.get_stats()
+        stats['queue_size'] = self._queue.qsize()
+        return stats
+        
+    def _start_writer_thread(self) -> None:
+        """Start background writer thread."""
+        self._stop_event.clear()
+        self._write_thread = threading.Thread(
+            target=self._process_queue,
+            daemon=True
+        )
+        self._write_thread.start()
+        
+    def _process_queue(self) -> None:
+        """Process chunks from queue."""
+        while not self._stop_event.is_set():
+            try:
+                # Get chunk with timeout
+                chunk = self._queue.get(timeout=0.1)
+                try:
+                    self.writer.write_chunk(chunk)
+                finally:
+                    self._queue.task_done()
+            except Empty:
+                continue

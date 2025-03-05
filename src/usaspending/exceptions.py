@@ -1,57 +1,54 @@
-"""Exception classes for USASpending data processing."""
+"""Exceptions for the USASpending package."""
 
-class USASpendingError(Exception):
-    """Base exception class for USASpending errors."""
+class USASpendingException(Exception):
+    """Base exception for all USASpending exceptions."""
     pass
 
-class ConfigurationError(USASpendingError):
-    """Error in configuration validation or processing."""
+class ConfigurationError(USASpendingException):
+    """Exception raised for configuration errors."""
     pass
 
-class ValidationError(USASpendingError):
-    """Error in data validation."""
+class ValidationError(USASpendingException):
+    """Exception raised for validation errors."""
     pass
 
-class ProcessingError(USASpendingError):
-    """Error in data processing."""
+class EntityMappingError(USASpendingException):
+    """Exception raised for entity mapping errors."""
     pass
 
-class EntityError(USASpendingError):
-    """Error in entity processing."""
+class TransformationError(USASpendingException):
+    """Exception raised for data transformation errors."""
     pass
 
-class ChunkingError(USASpendingError):
-    """Error in chunk processing."""
+class ProcessingError(USASpendingException):
+    """Exception raised for data processing errors."""
     pass
 
-class FileOperationError(USASpendingError):
-    """Error in file operations."""
+class EntityStoreError(USASpendingException):
+    """Exception raised for entity storage errors."""
     pass
 
-class EntityMappingError(EntityError):
-    """Base class for entity mapping errors."""
+class SerializationError(USASpendingException):
+    """Exception raised for serialization errors."""
     pass
 
-class FieldMappingError(EntityMappingError):
-    """Error in field mapping operations."""
+class CacheError(USASpendingException):
+    """Exception raised for caching errors."""
     pass
 
-class TransformationError(EntityMappingError):
-    """Error in field value transformation."""
+class DependencyError(USASpendingException):
+    """Exception raised for dependency resolution errors."""
     pass
 
-class TemplateError(EntityMappingError):
-    """Error in template-based field mapping."""
-    pass
-
-class ReferenceError(EntityMappingError):
-    """Error in entity reference mapping."""
-    pass
-
-class KeyGenerationError(EntityMappingError):
-    """Error generating entity keys."""
-    pass
-
-class EntityStoreError(EntityError):
-    """Error in entity storage operations."""
-    pass
+__all__ = [
+    'USASpendingException',
+    'ConfigurationError',
+    'ValidationError', 
+    'EntityMappingError',
+    'TransformationError',
+    'ProcessingError',
+    'EntityStoreError',
+    'SerializationError',
+    'CacheError',
+    'DependencyError'
+]
