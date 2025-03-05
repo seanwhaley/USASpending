@@ -9,6 +9,7 @@ import jsonschema
 from pydantic import BaseModel, Field, ConfigDict
 
 from .logging_config import get_logger
+from .config_validation import ConfigValidator, ValidationError
 
 logger = get_logger(__name__)
 
@@ -89,102 +90,6 @@ CORE_SCHEMA = {
     "required": ["paths", "entity_factory", "entity_store", "validation_service"]
 }
 
-@dataclass
-class ValidationError:
-    """Configuration validation error."""
-    path: str
-    message: str
-    severity: str = "error"
-
-class ConfigValidator:
-    """Validates configuration against schema."""
-    
-    def __init__(self, schema: Dict[str, Any]):
-        """Initialize with JSON schema."""
-        self.schema = schema
-        self.errors: List[ValidationError] = []
-        
-    def validate(self, config: Dict[str, Any]) -> bool:
-        """Validate configuration against schema."""
-        self.errors.clear()
-        
-        try:
-            jsonschema.validate(config, self.schema)
-        except jsonschema.exceptions.ValidationError as e:
-            self._add_error(str(e.path), str(e))
-            return False
-        except Exception as e:
-            self._add_error("", f"Validation error: {str(e)}")
-            return False
-            
-        # Additional custom validations
-        return self._validate_paths(config)
-        
-    def _validate_paths(self, config: Dict[str, Any]) -> bool:
-        """Validate path configurations."""
-        paths = config.get('paths', {})
-        valid = True
-        
-        for key, path in paths.items():
-            path_obj = Path(path)
-            
-            # Check existence for input paths
-            if key.endswith('_dir'):
-                if not path_obj.exists():
-                    if key in ('output_dir', 'log_dir'):
-                        try:
-                            path_obj.mkdir(parents=True, exist_ok=True)
-                        except Exception as e:
-                            self._add_error(
-                                f"paths.{key}",
-                                f"Could not create directory: {str(e)}"
-                            )
-                            valid = False
-                    else:
-                        self._add_error(
-                            f"paths.{key}",
-                            f"Path does not exist: {path}"
-                        )
-                        valid = False
-                        
-            # Check permissions
-            try:
-                if not os.access(path, os.R_OK):
-                    self._add_error(
-                        f"paths.{key}",
-                        f"Path not readable: {path}"
-                    )
-                    valid = False
-                    
-                if key in ('output_dir', 'log_dir'):
-                    if not os.access(path, os.W_OK):
-                        self._add_error(
-                            f"paths.{key}",
-                            f"Path not writable: {path}"
-                        )
-                        valid = False
-            except Exception as e:
-                self._add_error(
-                    f"paths.{key}",
-                    f"Error checking permissions: {str(e)}"
-                )
-                valid = False
-                
-        return valid
-        
-    def _add_error(self, path: str, message: str,
-                   severity: str = "error") -> None:
-        """Add validation error."""
-        self.errors.append(ValidationError(
-            path=path,
-            message=message,
-            severity=severity
-        ))
-        
-    def get_errors(self) -> List[ValidationError]:
-        """Get validation errors."""
-        return self.errors.copy()
-
 class ConfigLoader:
     """Loads and validates configuration from files."""
     
@@ -205,10 +110,11 @@ class ConfigLoader:
                         f"Unsupported config file format: {path}"
                     )
                     
-            if self.validator.validate(config):
+            validation_errors = self.validator.validate_config(config)
+            if not validation_errors:
                 return config
                 
-            for error in self.validator.get_errors():
+            for error in validation_errors:
                 logger.error(
                     f"Config validation error at {error.path}: "
                     f"{error.message}"
@@ -297,7 +203,7 @@ class ValidationGroup(BaseModel):
     description: Optional[str] = Field(None, description="Description of validation group purpose")
     enabled: bool = Field(default=True, description="Whether this group is active")
     rules: List[str] = Field(default_factory=list, description="Validation rules in this group")
-    dependencies: List[str] = Field(default_factory=list, description="Other groups this depends on")
+    dependencies: List[str] = Field(default_factory(list), description="Other groups this depends on")
     error_level: str = Field(default="error", description="How to handle validation failures")
 
 class ValidationConfig(BaseModel):

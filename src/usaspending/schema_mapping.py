@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 from .interfaces import ISchemaAdapter, ITransformerFactory
 from .config_schema import FieldProperties, TransformOperation
-from .schema_adapters import AdapterFactory
+from .schema_adapters import SchemaAdapterFactory  # Fixed import name
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -79,8 +79,8 @@ class SchemaMapping:
             if standard_transforms:
                 config['transforms'] = standard_transforms
 
-            # Create the adapter
-            adapter = AdapterFactory.create(adapter_type, config)
+            # Create the adapter using SchemaAdapterFactory directly
+            adapter = SchemaAdapterFactory().create_adapter(adapter_type, **config)
             if not adapter:
                 logger.error(f"Failed to create adapter for type {field_type}")
                 return None

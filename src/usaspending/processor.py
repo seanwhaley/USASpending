@@ -1,19 +1,22 @@
-"""Data processing module for converting and transforming data."""
-from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
-import json
+"""Data processing functionality for converting and validating data."""
+from typing import Dict, List, Any, Optional, Set, Callable
 import csv
+import json
+import os
+from pathlib import Path
+import time
+from concurrent.futures import ThreadPoolExecutor
 
-from .config import ConfigManager
-from .logging_config import get_logger
-from .file_utils import (
-    ensure_directory,
-    get_memory_efficient_reader,
-    write_json_file
+from . import (
+    get_logger, ConfigurationError, 
+    create_components_from_config,
+    EntityFactory, EntityStore, ValidationService,
+    ensure_directory_exists as ensure_directory
 )
 from .interfaces import IDataProcessor
+from .config import ConfigManager
 from .entity_mapper import EntityMapper
-from .exceptions import ProcessingError
+from .file_utils import get_memory_efficient_reader, write_json_file
 
 logger = get_logger(__name__)
 
@@ -111,32 +114,33 @@ def convert_csv_to_json(config_manager: ConfigManager) -> bool:
         
         # Process data in batches
         logger.info("Starting CSV to JSON conversion...")
-        reader = get_memory_efficient_reader(
+        
+        # Use context manager properly with 'with' statement
+        with get_memory_efficient_reader(
             str(input_path),
             batch_size=batch_size
-        )
+        ) as reader:
+            for batch in reader:
+                try:
+                    # Create processor for batch
+                    processor = DataProcessor(
+                        config_manager,
+                        EntityMapper(config.get('adapters', {}))
+                    )
+                    
+                    # Process batch
+                    processed = processor.process_batch(batch)
+                    
+                    # Group by entity type
+                    for record in processed:
+                        entity_type = record.get('entity_type')
+                        if entity_type in processed_data:
+                            processed_data[entity_type].append(record)
+                            
+                except Exception as e:
+                    logger.error(f"Error processing batch: {str(e)}")
+                    continue
         
-        for batch in reader:
-            try:
-                # Create processor for batch
-                processor = DataProcessor(
-                    config_manager,
-                    EntityMapper(config.get('adapters', {}))
-                )
-                
-                # Process batch
-                processed = processor.process_batch(batch)
-                
-                # Group by entity type
-                for record in processed:
-                    entity_type = record.get('entity_type')
-                    if entity_type in processed_data:
-                        processed_data[entity_type].append(record)
-                        
-            except Exception as e:
-                logger.error(f"Error processing batch: {str(e)}")
-                continue
-                
         # Write results
         for entity_type, entities in processed_data.items():
             if entities:

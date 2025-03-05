@@ -138,3 +138,6 @@ class BaseValidator(IFieldValidator):
                     return adapter
                     
         return None
+
+# Default implementation
+Validator = BaseValidator  # Use BaseValidator as the default implementation

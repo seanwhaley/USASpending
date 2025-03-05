@@ -162,3 +162,6 @@ class ValidationManager:
     def get_field_dependencies(self, field: str) -> List[FieldDependency]:
         """Get dependencies for a field."""
         return self.field_dependencies.get(field, [])
+
+# Default implementation
+FieldDependencyManager = ValidationManager  # Use ValidationManager as the default implementation

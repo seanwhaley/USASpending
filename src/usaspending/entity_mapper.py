@@ -1,9 +1,13 @@
-"""Entity mapping functionality."""
-from typing import Dict, Any, Optional, List, Set
+"""Entity mapping functionality for transforming data."""
+from typing import Dict, Any, Optional, List, Set, Union
+from dataclasses import dataclass
+import re
+
+from . import get_logger, ConfigurationError
 from .validation_base import BaseValidator
 from .text_file_cache import TextFileCache
 from .exceptions import EntityMappingError
-from .logging_config import get_logger
+from .interfaces import IEntityMapper
 
 logger = get_logger(__name__)
 

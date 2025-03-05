@@ -2,12 +2,15 @@
 from typing import Dict, Any
 from pathlib import Path
 
+from . import get_logger, create_component, create_components_from_config
 from .config import ConfigManager
 from .entity_store import EntityStore
 from .entity_mapper import EntityMapper
 from .validation import ValidationEngine
 from .entity_cache import EntityCache
 from .entity_serializer import EntitySerializer
+
+logger = get_logger(__name__)
 
 class ComponentFactory:
     """Creates and manages system components with dependency injection."""

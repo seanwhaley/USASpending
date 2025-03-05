@@ -1,14 +1,17 @@
 """Entity factory for creating entity instances from data."""
 from typing import Dict, Any, List, Optional, Type, Callable
 from dataclasses import dataclass, field
-from abc import ABC, abstractmethod
 import importlib
 import inspect
 
+from . import get_logger, ConfigurationError
 from .interfaces import IEntityFactory
-from .logging_config import get_logger
+from .component_utils import implements
 
 logger = get_logger(__name__)
+
+# Current module to help with handling imports
+__MODULE_PATH__ = __name__.rsplit('.', 1)[0]  # Gets 'usaspending' from 'usaspending.entity_factory'
 
 @dataclass
 class EntityConfig:
@@ -19,6 +22,7 @@ class EntityConfig:
     defaults: Dict[str, Any] = field(default_factory=dict)
     validators: Dict[str, Callable[[Any], bool]] = field(default_factory=dict)
 
+@implements(IEntityFactory)
 class EntityFactory(IEntityFactory):
     """Creates entity instances from data using configuration."""
     
@@ -26,11 +30,11 @@ class EntityFactory(IEntityFactory):
         """Initialize entity factory."""
         self.configs: Dict[str, EntityConfig] = {}
         self.creation_errors: List[str] = []
-        
+    
     def register_entity(self, entity_type: str, config: EntityConfig) -> None:
         """Register an entity configuration."""
         self.configs[entity_type] = config
-        
+    
     def create_entity(self, entity_type: str, data: Dict[str, Any]) -> Optional[Any]:
         """Create an entity instance from data."""
         self.creation_errors.clear()
@@ -80,7 +84,7 @@ class EntityFactory(IEntityFactory):
         except Exception as e:
             self.creation_errors.append(f"Error creating entity: {str(e)}")
             return None
-            
+    
     def get_entity_types(self) -> List[str]:
         """Get available entity types."""
         return list(self.configs.keys())
@@ -115,8 +119,16 @@ class EntityFactoryBuilder:
     def with_dataclass(self, entity_type: str, dataclass_path: str) -> 'EntityFactoryBuilder':
         """Add entity configuration from dataclass path."""
         try:
-            module_path, class_name = dataclass_path.rsplit('.', 1)
-            module = importlib.import_module(module_path)
+            # Support both absolute and relative imports
+            if dataclass_path.startswith("usaspending."):
+                # Handle case when config uses direct usaspending. imports
+                module_path, class_name = dataclass_path.rsplit('.', 1)
+                module = importlib.import_module(module_path)
+            else:
+                # Handle case when full path is provided
+                module_path, class_name = dataclass_path.rsplit('.', 1)
+                module = importlib.import_module(module_path)
+            
             entity_class = getattr(module, class_name)
             
             # Get required fields from dataclass
@@ -140,3 +152,26 @@ class EntityFactoryBuilder:
     def build(self) -> EntityFactory:
         """Create EntityFactory instance."""
         return self.factory
+
+# Factory method to create an instance from the configuration
+def create_entity_factory_from_config(config: Dict[str, Any]) -> EntityFactory:
+    """Create an EntityFactory instance from configuration."""
+    builder = EntityFactoryBuilder()
+    
+    # Handle configuration from YAML system.entity_factory section
+    if isinstance(config, dict) and "config" in config:
+        config = config["config"]
+    
+    # Process entity configurations if available
+    if "entities" in config:
+        for entity_type, entity_config in config["entities"].items():
+            class_path = entity_config.get("class")
+            if class_path:
+                builder.with_dataclass(entity_type, class_path)
+    
+    # Process type adapters if available
+    if "type_adapters" in config:
+        # Implementation for type adapters
+        pass
+    
+    return builder.build()

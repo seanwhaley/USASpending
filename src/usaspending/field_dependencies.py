@@ -262,3 +262,6 @@ class DependencyManager(IDependencyManager):
                 })
                 
         return analysis
+
+# Default implementation alias
+FieldDependencies = DependencyManager  # Use DependencyManager as the default implementation

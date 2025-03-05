@@ -1,4 +1,6 @@
 """Platform-specific file operations module."""
+from __future__ import annotations
+
 import os
 import csv
 import json
@@ -8,8 +10,14 @@ import fnmatch
 import logging
 import tempfile
 import shutil
+import gzip
+import threading
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, Callable, TextIO, BinaryIO, Iterator, TypeVar
+from typing import (
+    Any, Dict, List, Optional, Union, Callable, TextIO, BinaryIO, 
+    Iterator, TypeVar, Protocol, runtime_checkable, Final
+)
 from typing_extensions import TypeAlias
 from contextlib import contextmanager
 from io import StringIO, BytesIO
@@ -17,18 +25,27 @@ from functools import wraps
 
 # Type definitions for improved type safety
 T = TypeVar('T')
-JsonData = Dict[str, Any]
-CsvRow = Dict[str, str]
-BatchType = List[CsvRow]
+PathLike: TypeAlias = Union[str, Path]
+JsonData: TypeAlias = Dict[str, Any]
+CsvRow: TypeAlias = Dict[str, str]
+BatchType: TypeAlias = List[CsvRow]
+
+# Constants
+DEFAULT_ENCODING: Final[str] = 'utf-8'
+DEFAULT_CHUNK_SIZE: Final[int] = 8192
+DEFAULT_BATCH_SIZE: Final[int] = 1000
+DEFAULT_MAX_RETRIES: Final[int] = 3
+DEFAULT_RETRY_DELAY: Final[float] = 1.0
+DEFAULT_BACKOFF_FACTOR: Final[float] = 2.0
+DEFAULT_RETRY_EXCEPTIONS: Final[tuple] = (IOError, OSError)
+LOCK_EX: Final[int] = 2  # Exclusive lock
+LOCK_UN: Final[int] = 8  # Unlock 
+LOCK_NB: Final[int] = 4  # Non-blocking
 
 logger = logging.getLogger(__name__)
 
 # Platform-specific imports and constants
 _has_locking = False
-LOCK_EX = 2  # Exclusive lock
-LOCK_UN = 8  # Unlock 
-LOCK_NB = 4  # Non-blocking
-
 try:
     if os.name == 'nt':
         import msvcrt
@@ -42,11 +59,17 @@ try:
 except ImportError:
     logger.warning("File locking modules not available on this platform")
 
-# Default retry settings
-DEFAULT_MAX_RETRIES = 3
-DEFAULT_RETRY_DELAY = 1.0
-DEFAULT_BACKOFF_FACTOR = 2.0
-DEFAULT_RETRY_EXCEPTIONS = (IOError, OSError)
+@runtime_checkable
+class FileLike(Protocol):
+    """Protocol for file-like objects."""
+    def read(self, size: int = -1) -> Union[str, bytes]: ...
+    def write(self, data: Union[str, bytes]) -> int: ...
+    def close(self) -> None: ...
+    def fileno(self) -> int: ...
+    @property
+    def mode(self) -> str: ...
+    @property
+    def closed(self) -> bool: ...
 
 class FileOperationError(Exception):
     """Base exception for file operation errors."""
@@ -64,14 +87,20 @@ class FileFormatError(FileOperationError):
     """Exception for file format errors."""
     pass
 
+class FileLockError(FileOperationError):
+    """Exception for file locking errors."""
+    pass
+
 class RetryableError(FileOperationError):
     """Exception for errors that can be retried."""
     pass
 
-def retry_on_exception(max_retries: int = DEFAULT_MAX_RETRIES,
-                      retry_delay: float = DEFAULT_RETRY_DELAY,
-                      backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
-                      retry_exceptions: tuple = DEFAULT_RETRY_EXCEPTIONS) -> Callable:
+def retry_on_exception(
+    max_retries: int = DEFAULT_MAX_RETRIES,
+    retry_delay: float = DEFAULT_RETRY_DELAY,
+    backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
+    retry_exceptions: tuple = DEFAULT_RETRY_EXCEPTIONS
+) -> Callable:
     """Decorator to retry functions on exception.
     
     Args:
@@ -83,10 +112,10 @@ def retry_on_exception(max_retries: int = DEFAULT_MAX_RETRIES,
     Returns:
         Decorated function with retry logic
     """
-    def decorator(func):
+    def decorator(func: Callable) -> Callable:
         @wraps(func)
-        def wrapper(*args, **kwargs):
-            last_exception = None
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            last_exception: Optional[Exception] = None
             delay = retry_delay
             
             for attempt in range(max_retries + 1):
@@ -102,12 +131,16 @@ def retry_on_exception(max_retries: int = DEFAULT_MAX_RETRIES,
                         time.sleep(delay)
                         delay *= backoff_factor
                     
-            raise RetryableError(f"Operation failed after {max_retries} attempts: {str(last_exception)}")
+            if last_exception:
+                raise RetryableError(
+                    f"Operation failed after {max_retries} attempts: {str(last_exception)}"
+                ) from last_exception
+            raise RetryableError(f"Operation failed after {max_retries} attempts")
                     
         return wrapper
     return decorator
 
-def validate_file_operation(file: Any, operation: str) -> None:
+def validate_file_operation(file: FileLike, operation: str) -> None:
     """Validate file object before performing operations.
     
     Args:
@@ -117,8 +150,9 @@ def validate_file_operation(file: Any, operation: str) -> None:
     Raises:
         ValueError: If file object is invalid
     """
-    if not hasattr(file, 'fileno'):
-        raise ValueError("File object must have fileno() method")
+    if not isinstance(file, FileLike):
+        raise ValueError("File object must implement FileLike protocol")
+    
     try:
         fd = file.fileno()
         if fd < 0:
@@ -129,55 +163,69 @@ def validate_file_operation(file: Any, operation: str) -> None:
     if not file.mode.startswith(('r', 'w', 'a')):
         raise ValueError(f"Invalid file mode '{file.mode}' for {operation}")
         
-    # Check if file is closed
     if file.closed:
         raise ValueError("Cannot perform operation on closed file")
 
-def platform_lock_file(file: Any) -> None:
-    """Lock a file using platform-specific mechanisms."""
+def platform_lock_file(file: FileLike) -> None:
+    """Lock a file using platform-specific mechanisms.
+    
+    Args:
+        file: File object to lock
+        
+    Raises:
+        FileLockError: If locking fails
+    """
     if not _has_locking:
         return
         
     try:
         validate_file_operation(file, 'lock')
+        fd = file.fileno()
         
         if os.name == 'nt':
             try:
-                msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
             except (IOError, OSError) as e:
-                raise FileAccessError(f"Failed to lock file: {str(e)}")
+                raise FileLockError(f"Failed to lock file: {str(e)}") from e
         else:
             try:
-                fcntl.flock(file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except (IOError, OSError) as e:
-                raise FileAccessError(f"Failed to lock file: {str(e)}")
+                raise FileLockError(f"Failed to lock file: {str(e)}") from e
                 
     except ValueError as ve:
         logger.warning(f"File validation failed: {str(ve)}")
+        raise FileLockError(str(ve)) from ve
     except Exception as e:
         logger.warning(f"Failed to acquire file lock: {str(e)}")
+        raise FileLockError(str(e)) from e
 
-def platform_unlock_file(file: Any) -> None:
-    """Unlock a file using platform-specific mechanisms."""
+def platform_unlock_file(file: FileLike) -> None:
+    """Unlock a file using platform-specific mechanisms.
+    
+    Args:
+        file: File object to unlock
+    """
     if not _has_locking:
         return
         
     try:
         validate_file_operation(file, 'unlock')
+        fd = file.fileno()
         
         if os.name == 'nt':
             try:
-                msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
             except (IOError, OSError) as e:
                 logger.warning(f"Failed to unlock file: {str(e)}")
         else:
             try:
-                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+                fcntl.flock(fd, fcntl.LOCK_UN)
             except (IOError, OSError) as e:
                 logger.warning(f"Failed to unlock file: {str(e)}")
                 
     except ValueError as ve:
-        logger.warning(f"File validation failed: {str(ve)}")
+        logger.warning(f"File validation failed during unlock: {str(ve)}")
     except Exception as e:
         logger.warning(f"Failed to release file lock: {str(e)}")
 
@@ -426,9 +474,9 @@ def write_csv_file(path: str, data: List[Dict[str, Any]], fieldnames: Optional[L
             writer.writerows(data)
 
 @contextmanager
-def csv_reader(path: str, encoding: str = 'utf-8', delimiter: str = ',', 
-               quotechar: str = '"', batch_size: int = 1000) -> Iterator[BatchType]:
-    """Read CSV file in batches.
+def csv_reader(path: str, encoding: str = DEFAULT_ENCODING, delimiter: str = ',', 
+               quotechar: str = '"', batch_size: int = DEFAULT_BATCH_SIZE) -> Iterator[BatchType]:
+    """Read CSV file in batches with proper context management.
     
     Args:
         path: Path to file
@@ -444,21 +492,76 @@ def csv_reader(path: str, encoding: str = 'utf-8', delimiter: str = ',',
         FileOperationError: On file operation errors
         FileFormatError: On CSV parse errors
     """
+    file_obj = None
     try:
-        with safe_open_file(path, 'r', encoding=encoding, newline='') as f:
-            reader = csv.DictReader(f, delimiter=delimiter, quotechar=quotechar)
-            batch = []
-            
+        file_obj = open(path, 'r', encoding=encoding, newline='')
+        reader = csv.DictReader(file_obj, delimiter=delimiter, quotechar=quotechar)
+        batch = []
+        yield batch  # Initial yield for context manager protocol
+        
+        try:
             for row in reader:
                 batch.append(row)
                 if len(batch) >= batch_size:
                     yield batch
                     batch = []
-                    
+            if batch:  # Don't forget remaining items
+                yield batch
+        except csv.Error as e:
+            raise FileFormatError(f"CSV parse error in {path}: {str(e)}")
+        except Exception as e:
+            raise FileOperationError(f"Error reading CSV file {path}: {str(e)}")
+            
+    except Exception as e:
+        if isinstance(e, (FileFormatError, FileOperationError)):
+            raise
+        raise FileOperationError(f"Error setting up CSV reader for {path}: {str(e)}")
+    finally:
+        if file_obj:
+            file_obj.close()
+
+def get_memory_efficient_reader(path: str, encoding: str = DEFAULT_ENCODING, 
+                              batch_size: int = DEFAULT_BATCH_SIZE, **kwargs) -> Iterator[Union[BatchType, JsonData]]:
+    """Get memory-efficient reader based on file type.
+    
+    Args:
+        path: Path to file
+        encoding: File encoding
+        batch_size: Number of items to yield at once
+        **kwargs: Additional arguments for specific readers
+        
+    Returns:
+        Generator yielding batches of data
+        
+    Raises:
+        FileOperationError: On file operation errors
+        ValueError: If file type is not supported
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File not found: {path}")
+        
+    ext = os.path.splitext(path)[1].lower()
+    
+    if ext == '.csv':
+        with csv_reader(path, encoding=encoding, batch_size=batch_size, **kwargs) as reader:
+            for batch in reader:
+                yield batch
+    elif ext == '.json':
+        with safe_open_file(path, 'r', encoding=encoding) as f:
+            data = json.load(f)
+            if not isinstance(data, list):
+                raise FileFormatError(f"JSON file {path} must contain a list of objects")
+            
+            batch = []
+            for item in data:
+                batch.append(item)
+                if len(batch) >= batch_size:
+                    yield batch
+                    batch = []
             if batch:
                 yield batch
-    except csv.Error as e:
-        raise FileFormatError(f"Invalid CSV in {path}: {str(e)}")
+    else:
+        raise ValueError(f"Unsupported file type: {ext}")
 
 @retry_on_exception()
 def ensure_directory(path: str) -> None:
@@ -591,33 +694,6 @@ def get_file_size(path: str) -> int:
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
     return os.path.getsize(path)
-
-def get_memory_efficient_reader(path: str, encoding: str = 'utf-8', 
-                               batch_size: int = 1000, **kwargs) -> Iterator[Union[BatchType, JsonData]]:
-    """Get memory-efficient reader based on file type.
-    
-    Args:
-        path: Path to file
-        encoding: File encoding
-        batch_size: Number of items to yield at once
-        **kwargs: Additional arguments for specific readers
-        
-    Returns:
-        Generator yielding batches of data
-        
-    Raises:
-        FileOperationError: On file operation errors
-    """
-    ext = os.path.splitext(path)[1].lower()
-    
-    if ext == '.csv':
-        yield from csv_reader(path, encoding=encoding, batch_size=batch_size, **kwargs)
-    elif ext == '.json':
-        with safe_open_file(path, 'r', encoding=encoding) as f:
-            for obj in json.load(f):
-                yield obj
-    else:
-        raise ValueError(f"Unsupported file type: {ext}")
 
 @retry_on_exception()
 def get_files(directory: str, pattern: str = '*', recursive: bool = False) -> List[str]:

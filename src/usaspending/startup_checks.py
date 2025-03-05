@@ -1,16 +1,14 @@
-"""Startup validation system for checking initialization requirements."""
+"""System startup validation."""
 from typing import Dict, Any, List, Callable, Optional
 from dataclasses import dataclass
-import os
-import importlib
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
-from .interfaces import (
-    IEntityFactory, IEntityStore, IValidationService,
-    IEntityMapper, IDataProcessor, ITransformerFactory
-)
 from .logging_config import get_logger
+from .config_validation import ConfigValidator
+from .exceptions import ConfigurationError
 
 logger = get_logger(__name__)
 
@@ -20,15 +18,16 @@ class StartupCheck:
     name: str
     check_function: Callable[[], bool]
     error_message: str
-    severity: str = "error"  # error, warning, info
+    severity: str = "error"
     dependencies: List[str] = None
     timeout: float = 5.0  # seconds
 
 class StartupValidator:
     """Validates system configuration at startup."""
     
-    def __init__(self):
-        """Initialize validator."""
+    def __init__(self, config_validator: ConfigValidator):
+        """Initialize with configuration validator."""
+        self.config_validator = config_validator
         self.checks: Dict[str, StartupCheck] = {}
         self.results: Dict[str, bool] = {}
         self.messages: List[str] = []
@@ -39,25 +38,20 @@ class StartupValidator:
         
     def run_checks(self, parallel: bool = True) -> bool:
         """Run all validation checks."""
+        # First validate configuration
+        errors = self.config_validator.validate_config(self.config_validator.config)
+        if errors:
+            for error in errors:
+                self.messages.append(f"{error.severity.upper()}: {error.path}: {error.message}")
+            return False
+        
+        # Then run component checks
         self.results.clear()
-        self.messages.clear()
+        self.messages = []  # Keep config validation messages
         
         if parallel:
             return self._run_parallel_checks()
         return self._run_sequential_checks()
-        
-    def _run_sequential_checks(self) -> bool:
-        """Run checks sequentially."""
-        all_passed = True
-        
-        for name, check in self.checks.items():
-            passed = self._run_single_check(check)
-            self.results[name] = passed
-            all_passed = all_passed and (
-                passed or check.severity != "error"
-            )
-            
-        return all_passed
         
     def _run_parallel_checks(self) -> bool:
         """Run checks in parallel where possible."""
@@ -117,6 +111,19 @@ class StartupValidator:
                     
         return all_passed
         
+    def _run_sequential_checks(self) -> bool:
+        """Run checks sequentially."""
+        all_passed = True
+        
+        for name, check in self.checks.items():
+            passed = self._run_single_check(check)
+            self.results[name] = passed
+            all_passed = all_passed and (
+                passed or check.severity != "error"
+            )
+            
+        return all_passed
+        
     def _run_single_check(self, check: StartupCheck) -> bool:
         """Run a single validation check."""
         try:
@@ -152,150 +159,43 @@ class StartupValidator:
         """Get validation results."""
         return dict(self.results)
 
-class SystemValidator:
-    """Validates core system components and configuration."""
+def perform_startup_checks(config_validator: Optional[ConfigValidator] = None,
+                         parallel: bool = True) -> bool:
+    """Perform system startup validation checks.
     
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize with system configuration."""
-        self.config = config
-        self.validator = StartupValidator()
-        self._add_standard_checks()
+    Args:
+        config_validator: Optional config validator instance
+        parallel: Whether to run checks in parallel when possible
         
-    def _add_standard_checks(self) -> None:
-        """Add standard system validation checks."""
-        # Configuration checks
-        self.validator.add_check(StartupCheck(
-            name="config_paths",
-            check_function=self._check_paths,
-            error_message="Required paths are missing or inaccessible",
-            severity="error"
-        ))
+    Returns:
+        True if all checks pass, False otherwise
+    """
+    if not config_validator:
+        from .config import ConfigManager
+        config = ConfigManager()
+        config_validator = ConfigValidator(config)
         
-        self.validator.add_check(StartupCheck(
-            name="config_permissions",
-            check_function=self._check_permissions,
-            error_message="Insufficient permissions for required paths",
-            severity="error",
-            dependencies=["config_paths"]
-        ))
-        
-        # Component checks
-        self.validator.add_check(StartupCheck(
-            name="entity_factory",
-            check_function=self._check_entity_factory,
-            error_message="Entity factory initialization failed",
-            severity="error"
-        ))
-        
-        self.validator.add_check(StartupCheck(
-            name="entity_store",
-            check_function=self._check_entity_store,
-            error_message="Entity store initialization failed",
-            severity="error",
-            dependencies=["entity_factory"]
-        ))
-        
-        self.validator.add_check(StartupCheck(
-            name="validation_service",
-            check_function=self._check_validation_service,
-            error_message="Validation service initialization failed",
-            severity="error"
-        ))
-        
-        # Optional component checks
-        self.validator.add_check(StartupCheck(
-            name="transformer_factory",
-            check_function=self._check_transformer_factory,
-            error_message="Transformer factory initialization failed",
-            severity="warning"
-        ))
-        
-    def _check_paths(self) -> bool:
-        """Check required paths exist and are accessible."""
-        required_paths = self.config.get('paths', {})
-        for path_name, path in required_paths.items():
-            if not os.path.exists(path):
-                logger.error(f"Required path missing: {path_name} = {path}")
-                return False
-        return True
-        
-    def _check_permissions(self) -> bool:
-        """Check permissions on required paths."""
-        required_paths = self.config.get('paths', {})
-        for path_name, path in required_paths.items():
-            if not os.access(path, os.R_OK | os.W_OK):
-                logger.error(f"Insufficient permissions: {path_name} = {path}")
-                return False
-        return True
-        
-    def _check_entity_factory(self) -> bool:
-        """Check entity factory configuration."""
-        factory_config = self.config.get('entity_factory', {})
-        factory_class = factory_config.get('class')
-        if not factory_class:
-            return False
-            
-        try:
-            module_path, class_name = factory_class.rsplit('.', 1)
-            module = importlib.import_module(module_path)
-            factory_cls = getattr(module, class_name)
-            return issubclass(factory_cls, IEntityFactory)
-        except Exception:
-            return False
-            
-    def _check_entity_store(self) -> bool:
-        """Check entity store configuration."""
-        store_config = self.config.get('entity_store', {})
-        store_class = store_config.get('class')
-        if not store_class:
-            return False
-            
-        try:
-            module_path, class_name = store_class.rsplit('.', 1)
-            module = importlib.import_module(module_path)
-            store_cls = getattr(module, class_name)
-            return issubclass(store_cls, IEntityStore)
-        except Exception:
-            return False
-            
-    def _check_validation_service(self) -> bool:
-        """Check validation service configuration."""
-        validation_config = self.config.get('validation_service', {})
-        service_class = validation_config.get('class')
-        if not service_class:
-            return False
-            
-        try:
-            module_path, class_name = service_class.rsplit('.', 1)
-            module = importlib.import_module(module_path)
-            service_cls = getattr(module, class_name)
-            return issubclass(service_cls, IValidationService)
-        except Exception:
-            return False
-            
-    def _check_transformer_factory(self) -> bool:
-        """Check transformer factory configuration."""
-        transform_config = self.config.get('transformer_factory', {})
-        factory_class = transform_config.get('class')
-        if not factory_class:
-            return True  # Optional component
-            
-        try:
-            module_path, class_name = factory_class.rsplit('.', 1)
-            module = importlib.import_module(module_path)
-            factory_cls = getattr(module, class_name)
-            return issubclass(factory_cls, ITransformerFactory)
-        except Exception:
-            return False
-            
-    def validate(self) -> bool:
-        """Run all system validation checks."""
-        return self.validator.run_checks()
-        
-    def get_messages(self) -> List[str]:
-        """Get validation messages."""
-        return self.validator.get_messages()
-        
-    def get_results(self) -> Dict[str, bool]:
-        """Get validation results."""
-        return self.validator.get_results()
+    validator = StartupValidator(config_validator)
+    
+    # Add standard checks
+    validator.add_check(StartupCheck(
+        name="config_validation",
+        check_function=lambda: len(config_validator.validate_config()) == 0,
+        error_message="Configuration validation failed"
+    ))
+    
+    validator.add_check(StartupCheck(
+        name="logging_setup",
+        check_function=lambda: logger is not None,
+        error_message="Logging system not properly initialized"
+    ))
+    
+    # Run checks
+    success = validator.run_checks(parallel=parallel)
+    
+    # Log results
+    if not success:
+        for msg in validator.get_messages():
+            logger.error(msg)
+    
+    return success

@@ -1,14 +1,47 @@
 """Data transformation operations and factory."""
-from typing import Dict, Any, Optional, List, Callable, Type
+from typing import Dict, Any, Optional, List, Callable, Type, TypeVar, Generic, Union
 from abc import ABC, abstractmethod
 from datetime import datetime
 import re
 from decimal import Decimal, InvalidOperation
+import hashlib
+import json
+from collections import OrderedDict
 
 from .interfaces import ITransformerFactory
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
+
+T = TypeVar('T')
+
+class TransformerCache(Generic[T]):
+    """Simple cache for transformer results."""
+    
+    def __init__(self, max_size: int = 5000):
+        """Initialize cache with max size."""
+        self.max_size = max_size
+        self._cache: OrderedDict[str, T] = OrderedDict()
+        
+    def get(self, key: str) -> Optional[T]:
+        """Get cached value."""
+        return self._cache.get(key)
+        
+    def put(self, key: str, value: T) -> None:
+        """Cache value with LRU eviction."""
+        if len(self._cache) >= self.max_size:
+            self._cache.popitem(last=False)  # Remove oldest
+        self._cache[key] = value
+        
+    def compute_cache_key(self, value: Any, transform_type: str,
+                         config: Dict[str, Any]) -> str:
+        """Compute cache key from value and transformer config."""
+        key_parts = [
+            str(value),
+            transform_type,
+            json.dumps(config, sort_keys=True)
+        ]
+        return hashlib.md5('|'.join(key_parts).encode()).hexdigest()
 
 class TransformError(Exception):
     """Error during data transformation."""
@@ -328,3 +361,53 @@ class CachedTransformer(BaseTransformer):
             k: v for k, v in vars(self.base_transformer).items()
             if not k.startswith('_')
         }
+
+# Utility functions exported at module level
+def transform_date(value: Any, formats: Optional[List[str]] = None, 
+                  output_format: Optional[str] = None) -> Optional[str]:
+    """Transform a date value using standard formats.
+    
+    Args:
+        value: Date value to transform
+        formats: Optional list of input formats to try
+        output_format: Optional output format
+        
+    Returns:
+        Transformed date string or None if conversion failed
+    """
+    if not formats:
+        formats = ["%Y-%m-%d", "%m/%d/%Y", "%Y%m%d"]
+    transformer = DateTransformer(formats, output_format)
+    return transformer.transform(value)
+
+def transform_decimal(value: Any, precision: Optional[int] = None,
+                     as_decimal: bool = True) -> Optional[Union[Decimal, float]]:
+    """Transform a numeric value to decimal/float.
+    
+    Args:
+        value: Numeric value to transform
+        precision: Optional decimal precision
+        as_decimal: Return Decimal instead of float
+        
+    Returns:
+        Transformed numeric value or None if conversion failed
+    """
+    transformer = NumericTransformer(precision=precision, decimal=as_decimal)
+    return transformer.transform(value)
+
+def transform_enum(value: Any, mapping: Dict[str, Any],
+                  case_sensitive: bool = False,
+                  default: Optional[Any] = None) -> Any:
+    """Transform a value using enum mapping.
+    
+    Args:
+        value: Value to transform
+        mapping: Value mapping dictionary
+        case_sensitive: Case-sensitive mapping
+        default: Default value if not found
+        
+    Returns:
+        Mapped value or default if not found
+    """
+    transformer = MappingTransformer(mapping, case_sensitive, default)
+    return transformer.transform(value)

@@ -2,7 +2,7 @@
 from typing import Dict, Any, List, Set, Type, TypeVar, Optional, Union
 import json
 from datetime import datetime, date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from enum import Enum
 import dataclasses
 import base64
@@ -14,6 +14,39 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 T = TypeVar('T')
+
+def format_decimal(value: Union[Decimal, float, str, None], 
+                  precision: int = 2,
+                  rounding: str = ROUND_HALF_UP) -> Optional[str]:
+    """Format decimal value with specified precision.
+    
+    Args:
+        value: Value to format
+        precision: Number of decimal places (default: 2)
+        rounding: Rounding method to use (default: ROUND_HALF_UP)
+        
+    Returns:
+        Formatted decimal string or None if input is None
+    """
+    if value is None:
+        return None
+        
+    try:
+        if isinstance(value, str):
+            # Convert string to Decimal
+            value = Decimal(value)
+        elif isinstance(value, float):
+            # Convert float to Decimal to avoid precision issues
+            value = Decimal(str(value))
+        elif not isinstance(value, Decimal):
+            raise ValueError(f"Unsupported type for decimal formatting: {type(value)}")
+            
+        # Round to specified precision
+        return str(value.quantize(Decimal(f'0.{"0" * precision}'), rounding=rounding))
+        
+    except (ValueError, InvalidOperation, TypeError) as e:
+        logger.error(f"Error formatting decimal value {value}: {str(e)}")
+        return None
 
 def serialize_complex_value(value: Any) -> Dict[str, Any]:
     """Serialize complex Python value to JSON-compatible dict."""

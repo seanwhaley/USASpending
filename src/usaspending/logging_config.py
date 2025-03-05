@@ -1,75 +1,87 @@
-"""Logging configuration for USASpending data processing."""
+"""Logging configuration system."""
 import os
 import sys
 import logging
-from typing import Dict, Any, Optional
+import logging.config
+import yaml
+from pathlib import Path
+from threading import Lock
+from typing import Optional
+
+# Default basic logging format for early initialization
+DEFAULT_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+DEFAULT_LEVEL = logging.INFO
+
+# Global state
+_logging_initialized = False
+_logging_lock = Lock()
+
+def configure_logging(config_file: Optional[str] = None) -> None:
+    """Configure logging system.
+    
+    Args:
+        config_file: Optional path to logging configuration file
+    """
+    global _logging_initialized
+    
+    with _logging_lock:
+        if _logging_initialized:
+            return
+            
+        try:
+            if config_file:
+                _configure_from_file(config_file)
+            else:
+                # Basic configuration if no file provided
+                logging.basicConfig(
+                    format=DEFAULT_FORMAT,
+                    level=DEFAULT_LEVEL
+                )
+            
+            _logging_initialized = True
+            
+        except Exception as e:
+            # Fallback to basic configuration
+            logging.basicConfig(
+                format=DEFAULT_FORMAT,
+                level=DEFAULT_LEVEL
+            )
+            logging.error(f"Error configuring logging: {str(e)}")
+
+def _configure_from_file(config_file: str) -> None:
+    """Configure logging from configuration file."""
+    try:
+        path = Path(config_file)
+        if not path.exists():
+            raise FileNotFoundError(f"Logging config file not found: {config_file}")
+            
+        with open(path) as f:
+            config = yaml.safe_load(f)
+            
+        # Ensure log directory exists for file handlers
+        _ensure_log_directories(config)
+            
+        # Apply configuration
+        logging.config.dictConfig(config)
+        
+    except Exception as e:
+        raise RuntimeError(f"Failed to configure logging: {str(e)}")
+
+def _ensure_log_directories(config: dict) -> None:
+    """Ensure log directories exist for file handlers."""
+    handlers = config.get('handlers', {})
+    for handler in handlers.values():
+        if 'filename' in handler:
+            log_path = Path(handler['filename'])
+            log_path.parent.mkdir(parents=True, exist_ok=True)
 
 def get_logger(name: str) -> logging.Logger:
-    """Get a configured logger instance for the given name.
+    """Get a logger instance.
     
     Args:
         name: Logger name, typically __name__
         
     Returns:
-        Configured logger instance
+        Logger instance
     """
     return logging.getLogger(name)
-
-def configure_logging(config: Dict[str, Any]) -> bool:
-    """Configure logging based on configuration settings.
-    
-    Args:
-        config: Configuration dictionary containing logging settings
-        
-    Returns:
-        True if logging was configured successfully, False otherwise
-    """
-    try:
-        log_level = config.get('system', {}).get('logging', {}).get('level', 'INFO')
-        log_file = config.get('system', {}).get('logging', {}).get('file')
-        log_format = config.get('system', {}).get('logging', {}).get(
-            'format', '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        
-        handlers = []
-        
-        # Always add console handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(logging.Formatter(log_format))
-        handlers.append(console_handler)
-        
-        # Add file handler if specified
-        if log_file:
-            log_dir = os.path.dirname(log_file)
-            if log_dir and not os.path.exists(log_dir):
-                os.makedirs(log_dir, exist_ok=True)
-                
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(logging.Formatter(log_format))
-            handlers.append(file_handler)
-        
-        # Configure root logger
-        root_logger = logging.getLogger()
-        root_logger.setLevel(getattr(logging, log_level.upper()))
-        
-        # Remove any existing handlers
-        for handler in list(root_logger.handlers):
-            root_logger.removeHandler(handler)
-            
-        # Add new handlers
-        for handler in handlers:
-            root_logger.addHandler(handler)
-            
-        return True
-        
-    except Exception as e:
-        print(f"Error configuring logging: {str(e)}")
-        return False
-
-# Removed backward compatibility alias: setup_logging = configure_logging
-
-# Initialize basic logging for module imports
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)

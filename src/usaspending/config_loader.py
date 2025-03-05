@@ -4,9 +4,8 @@ import yaml
 import os
 from pathlib import Path
 
-from .logging_config import get_logger
+from . import get_logger, create_component_from_config, ConfigurationError
 from .validation_rules import ValidationRule, ValidationRuleLoader
-from .exceptions import ConfigurationError
 
 logger = get_logger(__name__)
 
@@ -102,3 +101,27 @@ class ConfigLoader:
             List of entity type names
         """
         return list(self.config.get('entities', {}).keys())
+
+def load_components(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Load and initialize components from configuration."""
+    components = {}
+    
+    # Load standard components in dependency order
+    component_names = [
+        'entity_factory',
+        'entity_store',
+        'validation_service'
+    ]
+    
+    for name in component_names:
+        try:
+            if 'system' in config and name in config['system']:
+                component_config = config['system'][name]
+                components[name] = create_component_from_config(component_config, components)
+            else:
+                logger.warning(f"Component configuration missing for {name}")
+        except Exception as e:
+            logger.error(f"Error loading component {name}: {str(e)}")
+            raise
+            
+    return components
