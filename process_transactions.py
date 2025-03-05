@@ -43,8 +43,9 @@ Examples:
     args = parser.parse_args()
     
     try:
-        # Set up basic logging first
-        configure_logging()
+        # Set up logging with explicit config file path
+        logging_config_path = Path(__file__).resolve().parent / "logging_config.yaml"
+        configure_logging(str(logging_config_path))
         logger = get_logger(__name__)
         logger.info("Starting USASpending data processing")
         

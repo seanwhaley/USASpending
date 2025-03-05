@@ -249,16 +249,40 @@ class FileSystemEntityStore(IEntityStore[T]):
         self._lock = threading.RLock()
         self._type_counts: Dict[str, int] = {}
         self._ensure_base_dir()
+        
+        # Log the base directory path to verify it's correct
+        logger.info(f"Entity store initialized with base path: {os.path.abspath(self.base_path)}")
     
     def _ensure_base_dir(self) -> None:
         """Ensure base directory exists."""
-        os.makedirs(self.base_path, exist_ok=True)
+        try:
+            os.makedirs(self.base_path, exist_ok=True)
+            # Verify directory exists after creation
+            if not os.path.exists(self.base_path):
+                logger.error(f"Failed to create base directory: {self.base_path}")
+            else:
+                # Test write permissions
+                test_file = self.base_path / "write_test.tmp"
+                try:
+                    with open(test_file, 'w') as f:
+                        f.write("test")
+                    os.remove(test_file)
+                except Exception as e:
+                    logger.error(f"Base directory exists but is not writable: {self.base_path}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error creating base directory: {self.base_path}: {str(e)}")
     
     def _get_type_dir(self, entity_type: str, create: bool = True) -> pathlib.Path:
         """Get directory path for entity type."""
         type_dir = self.base_path / entity_type
         if create:
-            os.makedirs(type_dir, exist_ok=True)
+            try:
+                os.makedirs(type_dir, exist_ok=True)
+                # Verify directory exists after creation
+                if not os.path.exists(type_dir):
+                    logger.error(f"Failed to create entity type directory: {type_dir}")
+            except Exception as e:
+                logger.error(f"Error creating entity type directory: {type_dir}: {str(e)}")
         return type_dir
     
     def _get_subdir_path(self, entity_type: str, entity_id: str) -> pathlib.Path:
@@ -266,7 +290,13 @@ class FileSystemEntityStore(IEntityStore[T]):
         # Use first few chars of ID for subdir to avoid too many files in one dir
         subdir_name = entity_id[:3] if len(entity_id) > 3 else entity_id
         subdir_path = self._get_type_dir(entity_type) / subdir_name
-        os.makedirs(subdir_path, exist_ok=True)
+        try:
+            os.makedirs(subdir_path, exist_ok=True)
+            # Verify directory exists after creation
+            if not os.path.exists(subdir_path):
+                logger.error(f"Failed to create entity subdirectory: {subdir_path}")
+        except Exception as e:
+            logger.error(f"Error creating entity subdirectory: {subdir_path}: {str(e)}")
         return subdir_path
     
     def _get_entity_path(self, entity_type: str, entity_id: str) -> pathlib.Path:
@@ -308,20 +338,29 @@ class FileSystemEntityStore(IEntityStore[T]):
             
             # Write entity data
             try:
+                # Prepare JSON content before opening file
+                json_content = json.dumps(data, indent=2)
+                
+                # Ensure parent directory exists again right before writing
+                os.makedirs(file_path.parent, exist_ok=True)
+                
                 if self.compression:
                     with gzip.open(file_path, 'wt', encoding='utf-8') as f:
-                        json.dump(data, f, indent=2)
+                        f.write(json_content)
                 else:
                     with open(file_path, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, indent=2)
+                        f.write(json_content)
                         
                 # Update type counts cache
                 self._type_counts[entity_type] = -1  # Invalidate count
                 
+                # Log successful entity save
+                logger.debug(f"Successfully saved entity {entity_type}/{entity_id} to {file_path}")
+                
                 return entity_id
                 
             except Exception as e:
-                logger.error(f"Error saving entity {entity_id}: {str(e)}")
+                logger.error(f"Error saving entity {entity_id} to {file_path}: {str(e)}")
                 raise
     
     def get(self, entity_type: str, entity_id: str) -> Optional[T]:

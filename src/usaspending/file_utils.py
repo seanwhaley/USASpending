@@ -520,6 +520,7 @@ def csv_reader(path: str, encoding: str = DEFAULT_ENCODING, delimiter: str = ','
         if file_obj:
             file_obj.close()
 
+@contextmanager
 def get_memory_efficient_reader(path: str, encoding: str = DEFAULT_ENCODING, 
                               batch_size: int = DEFAULT_BATCH_SIZE, **kwargs) -> Iterator[Union[BatchType, JsonData]]:
     """Get memory-efficient reader based on file type.
@@ -542,26 +543,99 @@ def get_memory_efficient_reader(path: str, encoding: str = DEFAULT_ENCODING,
         
     ext = os.path.splitext(path)[1].lower()
     
-    if ext == '.csv':
-        with csv_reader(path, encoding=encoding, batch_size=batch_size, **kwargs) as reader:
-            for batch in reader:
-                yield batch
-    elif ext == '.json':
-        with safe_open_file(path, 'r', encoding=encoding) as f:
-            data = json.load(f)
-            if not isinstance(data, list):
-                raise FileFormatError(f"JSON file {path} must contain a list of objects")
-            
-            batch = []
-            for item in data:
-                batch.append(item)
-                if len(batch) >= batch_size:
-                    yield batch
+    try:
+        if ext == '.csv':
+            file_obj = None
+            try:
+                file_obj = open(path, 'r', encoding=encoding, newline='')
+                reader = csv.DictReader(file_obj, **kwargs)
+                
+                def csv_batch_generator():
                     batch = []
-            if batch:
-                yield batch
-    else:
-        raise ValueError(f"Unsupported file type: {ext}")
+                    for row in reader:
+                        batch.append(row)
+                        if len(batch) >= batch_size:
+                            yield batch
+                            batch = []
+                    if batch:
+                        yield batch
+                    
+                yield csv_batch_generator()
+                
+            except Exception as e:
+                if isinstance(e, csv.Error):
+                    raise FileFormatError(f"CSV parse error in {path}: {str(e)}")
+                raise FileOperationError(f"Error reading CSV file {path}: {str(e)}")
+            finally:
+                if file_obj:
+                    file_obj.close()
+                    
+        elif ext == '.json':
+            with safe_open_file(path, 'r', encoding=encoding) as f:
+                data = json.load(f)
+                if not isinstance(data, list):
+                    raise FileFormatError(f"JSON file {path} must contain a list of objects")
+                
+                def json_batch_generator():
+                    batch = []
+                    for item in data:
+                        batch.append(item)
+                        if len(batch) >= batch_size:
+                            yield batch
+                            batch = []
+                    if batch:
+                        yield batch
+                        
+                yield json_batch_generator()
+        else:
+            raise ValueError(f"Unsupported file type: {ext}")
+    except Exception as e:
+        logger.error(f"Error reading file {path}: {str(e)}")
+        raise
+
+def get_file_size(path: str) -> int:
+    """Get file size in bytes.
+    
+    Args:
+        path: Path to file
+        
+    Returns:
+        File size in bytes
+        
+    Raises:
+        FileNotFoundError: If file doesn't exist
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File not found: {path}")
+    return os.path.getsize(path)
+
+@retry_on_exception()
+def get_files(directory: str, pattern: str = '*', recursive: bool = False) -> List[str]:
+    """Get list of files matching pattern.
+    
+    Args:
+        directory: Directory to search
+        pattern: Glob pattern to match
+        recursive: Whether to search recursively
+        
+    Returns:
+        List of matching file paths
+        
+    Raises:
+        FileOperationError: On file operation errors
+    """
+    try:
+        if recursive:
+            matches = []
+            for root, _, files in os.walk(directory):
+                for filename in files:
+                    if fnmatch.fnmatch(filename, pattern):
+                        matches.append(os.path.join(root, filename))
+            return matches
+        else:
+            return glob.glob(os.path.join(directory, pattern))
+    except OSError as e:
+        raise FileOperationError(f"Failed to list files in {directory}: {str(e)}")
 
 @retry_on_exception()
 def ensure_directory(path: str) -> None:
@@ -678,47 +752,3 @@ def atomic_replace(source: str, target: str) -> None:
             except OSError:
                 pass  # Can't restore backup
         raise FileOperationError(f"Failed to replace {target} with {source}: {str(e)}")
-
-def get_file_size(path: str) -> int:
-    """Get file size in bytes.
-    
-    Args:
-        path: Path to file
-        
-    Returns:
-        File size in bytes
-        
-    Raises:
-        FileNotFoundError: If file doesn't exist
-    """
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"File not found: {path}")
-    return os.path.getsize(path)
-
-@retry_on_exception()
-def get_files(directory: str, pattern: str = '*', recursive: bool = False) -> List[str]:
-    """Get list of files matching pattern.
-    
-    Args:
-        directory: Directory to search
-        pattern: Glob pattern to match
-        recursive: Whether to search recursively
-        
-    Returns:
-        List of matching file paths
-        
-    Raises:
-        FileOperationError: On file operation errors
-    """
-    try:
-        if recursive:
-            matches = []
-            for root, _, files in os.walk(directory):
-                for filename in files:
-                    if fnmatch.fnmatch(filename, pattern):
-                        matches.append(os.path.join(root, filename))
-            return matches
-        else:
-            return glob.glob(os.path.join(directory, pattern))
-    except OSError as e:
-        raise FileOperationError(f"Failed to list files in {directory}: {str(e)}")
