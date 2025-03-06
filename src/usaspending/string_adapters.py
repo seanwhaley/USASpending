@@ -1,88 +1,115 @@
-"""String field adapters implementation."""
-from typing import Any, Dict, Optional, Union
+"""String field adapters for USASpending data validation."""
+from typing import Dict, Any, List, Optional, Pattern
 import re
-from pydantic import BaseModel, Field, field_validator
 
 from .schema_adapters import PydanticAdapter, SchemaAdapterFactory, AdapterTransform
+from .interfaces import ISchemaAdapter
 
-class StringFieldAdapter(PydanticAdapter[str, str]):
-    """Base adapter for string fields with common string validations."""
+class StringFieldAdapter(ISchemaAdapter):
+    """Adapter for string field validation and transformation.
     
-    def _create_model(self) -> type[BaseModel]:
-        """Create Pydantic model for string validation/transformation."""
-        min_length = self.config.get('min_length')
-        max_length = self.config.get('max_length')
-        pattern = self.config.get('pattern')
+    Provides extended functionality for string fields beyond basic validation.
+    """
+    
+    def __init__(self, min_length: Optional[int] = None,
+                 max_length: Optional[int] = None,
+                 pattern: Optional[str] = None,
+                 strip: bool = True,
+                 case_sensitive: bool = True,
+                 trim_whitespace: bool = True):
+        """Initialize string field adapter.
         
-        class StringModel(BaseModel):
-            value: str = Field(
-                min_length=min_length,
-                max_length=max_length,
-                pattern=pattern if pattern else None,
-                description=self._generate_field_description()
+        Args:
+            min_length: Minimum string length
+            max_length: Maximum string length
+            pattern: Regex pattern to validate against
+            strip: Whether to strip whitespace
+            case_sensitive: Whether validation is case sensitive
+            trim_whitespace: Whether to trim whitespace during transform
+        """
+        self.min_length = min_length
+        self.max_length = max_length
+        self.pattern = pattern
+        self._pattern_regex = re.compile(pattern) if pattern else None
+        self.strip = strip
+        self.case_sensitive = case_sensitive
+        self.trim_whitespace = trim_whitespace
+        self.errors: List[str] = []
+    
+    def validate(self, value: Any, field_name: str) -> bool:
+        """Validate string value against configured rules.
+        
+        Args:
+            value: String value to validate
+            field_name: Name of the field for error messages
+            
+        Returns:
+            Boolean indicating validation success
+        """
+        self.errors = []
+        
+        if value is None:
+            return True
+            
+        # Convert to string if needed
+        if not isinstance(value, str):
+            value = str(value)
+        
+        # Apply case transformation for validation if needed
+        check_value = value
+        if not self.case_sensitive:
+            check_value = value.lower()
+        
+        # Strip whitespace if configured
+        if self.strip:
+            check_value = check_value.strip()
+        
+        # Check length constraints
+        if self.min_length is not None and len(check_value) < self.min_length:
+            self.errors.append(
+                f"{field_name}: String length {len(check_value)} is less than minimum {self.min_length}"
             )
+            return False
             
-            @field_validator('value', mode='before')
-            @classmethod
-            def clean_string(cls, v: Any) -> str:
-                if not isinstance(v, str):
-                    v = str(v)
-                return v
+        if self.max_length is not None and len(check_value) > self.max_length:
+            self.errors.append(
+                f"{field_name}: String length {len(check_value)} exceeds maximum {self.max_length}"
+            )
+            return False
+            
+        # Check pattern match
+        if self._pattern_regex and not self._pattern_regex.match(check_value):
+            self.errors.append(
+                f"{field_name}: Value '{value}' does not match pattern: {self.pattern}"
+            )
+            return False
+            
+        return True
+    
+    def transform(self, value: Any, field_name: str) -> Optional[str]:
+        """Transform value to appropriate string format.
         
-        return StringModel
-    
-    def _validate_config(self) -> None:
-        """Validate string adapter configuration."""
-        if 'min_length' in self.config:
-            if not isinstance(self.config['min_length'], int):
-                raise ValueError("'min_length' must be an integer")
-            if self.config['min_length'] < 0:
-                raise ValueError("'min_length' must be non-negative")
-                
-        if 'max_length' in self.config:
-            if not isinstance(self.config['max_length'], int):
-                raise ValueError("'max_length' must be an integer")
-            if self.config['max_length'] < 0:
-                raise ValueError("'max_length' must be non-negative")
+        Args:
+            value: Value to transform
+            field_name: Name of the field (not used in this implementation)
             
-        if 'pattern' in self.config:
-            try:
-                re.compile(self.config['pattern'])
-            except re.error as e:
-                raise ValueError(f"Invalid regex pattern: {str(e)}")
+        Returns:
+            Transformed string or None
+        """
+        if value is None:
+            return None
+            
+        result = str(value)
+        
+        if self.trim_whitespace:
+            result = result.strip()
+            
+        return result
     
-    def _generate_field_description(self) -> str:
-        """Generate field description from configuration."""
-        desc_parts = []
-        if 'min_length' in self.config:
-            desc_parts.append(f"Minimum length: {self.config['min_length']}")
-        if 'max_length' in self.config:
-            desc_parts.append(f"Maximum length: {self.config['max_length']}")
-        if 'pattern' in self.config:
-            desc_parts.append(f"Must match pattern: {self.config['pattern']}")
-        return ". ".join(desc_parts) if desc_parts else "String field"
-
-# Register string-specific transformations
-@AdapterTransform.register('normalize_whitespace')
-def transform_normalize_whitespace(value: str) -> str:
-    """Normalize whitespace in string."""
-    return ' '.join(str(value).split())
-
-@AdapterTransform.register('replace_chars')
-def transform_replace_chars(value: str, replacements: Dict[str, str]) -> str:
-    """Replace characters in string according to mapping."""
-    result = str(value)
-    for old, new in replacements.items():
-        result = result.replace(old, new)
-    return result
-
-@AdapterTransform.register('extract_pattern')
-def transform_extract_pattern(value: str, pattern: str) -> str:
-    """Extract first match of pattern from string."""
-    match = re.search(pattern, str(value))
-    if match:
-        return match.group(0)
-    return value
-
-# Register adapter with factory
-SchemaAdapterFactory.register('string', StringFieldAdapter)
+    def get_validation_errors(self) -> List[str]:
+        """Get validation error messages.
+        
+        Returns:
+            List of validation error messages
+        """
+        return self.errors.copy()

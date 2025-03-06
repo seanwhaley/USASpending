@@ -14,3 +14,14 @@ def get_fallback_message(key: str, **kwargs) -> str:
         return template.format(**kwargs)
     except Exception as e:
         return CRITICAL_FALLBACK['system_error'].format(error=str(e))
+
+def print_error(message: str) -> None:
+    """Print a formatted error message to stderr."""
+    import sys
+    try:
+        # Try to use colorama if already imported in the calling module
+        from colorama import Fore, Style
+        print(f"{Fore.RED}ERROR: {message}{Style.RESET_ALL}", file=sys.stderr)
+    except ImportError:
+        # Fall back to plain formatting if colorama is not available
+        print(f"ERROR: {message}", file=sys.stderr)

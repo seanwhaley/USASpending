@@ -1,6 +1,147 @@
-"""Configuration schema definitions for field validation and transformation."""
-from typing import Dict, List, Any, Optional, Union, ForwardRef
+"""Configuration schema and validation system."""
+from typing import Dict, Any, List, Optional, Union, ForwardRef
+from dataclasses import dataclass
+import os
+from pathlib import Path
+import json
+import yaml
+import jsonschema
 from pydantic import BaseModel, Field, ConfigDict
+
+from .logging_config import get_logger
+from .config_validation import ConfigValidator, ValidationError
+
+logger = get_logger(__name__)
+
+# Core configuration schema
+CORE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "paths": {
+            "type": "object",
+            "properties": {
+                "data_dir": {"type": "string"},
+                "output_dir": {"type": "string"},
+                "log_dir": {"type": "string"}
+            },
+            "required": ["data_dir", "output_dir"]
+        },
+        "entity_factory": {
+            "type": "object",
+            "properties": {
+                "class": {"type": "string"},
+                "config": {"type": "object"}
+            },
+            "required": ["class"]
+        },
+        "entity_store": {
+            "type": "object",
+            "properties": {
+                "class": {"type": "string"},
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "storage_type": {"enum": ["sqlite", "filesystem"]},
+                        "path": {"type": "string"}
+                    },
+                    "required": ["storage_type", "path"]
+                }
+            },
+            "required": ["class", "config"]
+        },
+        "validation_service": {
+            "type": "object",
+            "properties": {
+                "class": {"type": "string"},
+                "config": {
+                    "type": "object",
+                    "properties": {
+                        "rules_path": {"type": "string"},
+                        "strict_mode": {"type": "boolean"}
+                    }
+                }
+            },
+            "required": ["class"]
+        },
+        "transformer_factory": {
+            "type": "object",
+            "properties": {
+                "class": {"type": "string"},
+                "config": {"type": "object"}
+            }
+        },
+        "processing": {
+            "type": "object",
+            "properties": {
+                "chunk_size": {"type": "integer", "minimum": 1},
+                "worker_threads": {"type": "integer", "minimum": 1},
+                "max_retries": {"type": "integer", "minimum": 0}
+            }
+        },
+        "logging": {
+            "type": "object",
+            "properties": {
+                "level": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
+                "format": {"type": "string"},
+                "file": {"type": "string"}
+            }
+        }
+    },
+    "required": ["paths", "entity_factory", "entity_store", "validation_service"]
+}
+
+class ConfigLoader:
+    """Loads and validates configuration from files."""
+    
+    def __init__(self, schema: Dict[str, Any]):
+        """Initialize with schema."""
+        self.validator = ConfigValidator(schema)
+        
+    def load_file(self, path: str) -> Optional[Dict[str, Any]]:
+        """Load configuration from file."""
+        try:
+            with open(path, 'r') as f:
+                if path.endswith('.json'):
+                    config = json.load(f)
+                elif path.endswith(('.yml', '.yaml')):
+                    config = yaml.safe_load(f)
+                else:
+                    raise ValueError(
+                        f"Unsupported config file format: {path}"
+                    )
+                    
+            validation_errors = self.validator.validate_config(config)
+            if not validation_errors:
+                return config
+                
+            for error in validation_errors:
+                logger.error(
+                    f"Config validation error at {error.path}: "
+                    f"{error.message}"
+                )
+                
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error loading config file: {str(e)}")
+            return None
+            
+    def merge_configs(self, base: Dict[str, Any],
+                     override: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge two configurations, override taking precedence."""
+        merged = base.copy()
+        
+        def merge_dict(target: Dict[str, Any],
+                      source: Dict[str, Any]) -> None:
+            for key, value in source.items():
+                if (key in target and isinstance(target[key], dict)
+                        and isinstance(value, dict)):
+                    merge_dict(target[key], value)
+                else:
+                    target[key] = value
+                    
+        merge_dict(merged, override)
+        return merged
 
 class TransformOperation(BaseModel):
     """Schema for transformation operations."""
@@ -62,7 +203,7 @@ class ValidationGroup(BaseModel):
     description: Optional[str] = Field(None, description="Description of validation group purpose")
     enabled: bool = Field(default=True, description="Whether this group is active")
     rules: List[str] = Field(default_factory=list, description="Validation rules in this group")
-    dependencies: List[str] = Field(default_factory=list, description="Other groups this depends on")
+    dependencies: List[str] = Field(default_factory(list), description="Other groups this depends on")
     error_level: str = Field(default="error", description="How to handle validation failures")
 
 class ValidationConfig(BaseModel):

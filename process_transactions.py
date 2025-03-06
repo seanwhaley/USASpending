@@ -1,110 +1,95 @@
-#!/usr/bin/env python3
-"""Transaction CSV to JSON Processor for USASpending data."""
+#!/usr/bin/env python
+"""Main entry point for USASpending data processing."""
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Any, Optional
+import logging.config
+import argparse
+import colorama
+from colorama import Fore, Style
 
-# Add project root to Python path
-project_root = Path(__file__).parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+# Add src directory to path for importing local modules
+src_dir = Path(__file__).resolve().parent / 'src'
+sys.path.insert(0, str(src_dir))
 
-from src.usaspending.config import ConfigManager
-from src.usaspending.logging_config import setup_logging, get_logger
+from src.usaspending.logging_config import configure_logging, get_logger
+from src.usaspending.config_validation import ConfigValidator
+from src.usaspending.config_schemas import ROOT_CONFIG_SCHEMA
+from src.usaspending.startup_checks import StartupValidator
+from src.usaspending.exceptions import ConfigurationError
 from src.usaspending.processor import convert_csv_to_json
-from src.usaspending.fallback_messages import get_fallback_message
-
-def test_logging():
-    """Test logging configuration."""
-    config = {'system': {'logging': {'level': 'INFO'}}}
-    if not setup_logging(config):
-        print("Failed to configure logging")
-        return False
-        
-    logger = get_logger(__name__)
-    logger.debug("Debug test message")
-    logger.info("Info test message")
-    logger.warning("Warning test message")
-    logger.error("Error test message")
-    return True
-
-def load_configuration() -> Optional[ConfigManager]:
-    """Load system configuration from environment or default location."""
-    try:
-        config_path = os.getenv(
-            'USASPENDING_CONFIG',
-            str(project_root / 'conversion_config.yaml')
-        )
-        config = ConfigManager(config_path)
-        return config
-    except Exception as e:
-        print(f"Configuration error: {str(e)}")
-        return None
+from src.usaspending.fallback_messages import print_error
+from src.usaspending.config import ConfigManager
 
 def main() -> int:
-    """Main entry point for processing."""
-    # Test logging first
-    if not test_logging():
-        return 1
-        
+    """Main entry point for data processing."""
+    colorama.init()  # Initialize colorama for colored output
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description="Process USASpending transaction data",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s
+  %(prog)s custom_config.yaml
+  %(prog)s --verbose conversion_config.yaml
+        """
+    )
+    parser.add_argument("config_file", nargs='?', default="conversion_config.yaml",
+                       help="Path to configuration YAML file (default: conversion_config.yaml)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                       help="Show detailed processing information")
+    args = parser.parse_args()
+    
     try:
-        # 1. Load configuration first
-        config = load_configuration()
-        if not config:
-            print("Failed to load configuration")
-            return 1
-
-        # 2. Setup logging using configuration BEFORE any logging calls
-        system_config = config.get('system', {})
-        if not setup_logging(system_config):
-            print("Failed to configure logging")
-            return 1
-            
-        # 3. Only get logger after setup is complete
+        # Set up logging with explicit config file path
+        logging_config_path = Path(__file__).resolve().parent / "logging_config.yaml"
+        configure_logging(str(logging_config_path))
         logger = get_logger(__name__)
+        logger.info("Starting USASpending data processing")
         
-        # Validate configuration after logging is set up
-        system_config = config.get('system')
-        if not system_config:
-            logger.error("Missing 'system' configuration section")
-            return 1
-            
-        io_config = system_config.get('io')
-        if not io_config:
-            logger.error("Missing 'system.io' configuration section")
-            return 1
-            
-        input_config = io_config.get('input')
-        if not input_config or 'file' not in input_config:
-            logger.error("Missing or invalid input file configuration")
-            return 1
-            
-        logger.info("Configuration and logging setup complete")
+        # Create and validate configuration
+        validator = ConfigValidator(ROOT_CONFIG_SCHEMA)
+        errors = validator.validate_file(args.config_file)
         
-        # 4. Process transactions with validated configuration
-        input_file = config.get('system', {}).get('io', {}).get('input', {}).get('file')
-        if not input_file:
-            logger.error("No input file specified in configuration")
+        if errors:
+            print(f"{Fore.RED}Configuration validation failed:{Style.RESET_ALL}")
+            for error in errors:
+                print(f"  • [{error.severity.upper()}] {error.path}: {error.message}")
             return 1
             
-        logger.info(f"Processing input file: {input_file}")
-        if convert_csv_to_json(config):
-            logger.info("Processing completed successfully")
+        # Run startup validation
+        startup_validator = StartupValidator(validator)
+        if not startup_validator.run_checks():
+            print(f"{Fore.RED}Startup validation failed:{Style.RESET_ALL}")
+            for message in startup_validator.get_messages():
+                print(f"  • {message}")
+            return 1
+            
+        # Process data with validated configuration using component context
+        with validator.component_context() as config:
+            result = convert_csv_to_json(config)
+            
+        if result:
+            print(f"{Fore.GREEN}✓ Processing completed successfully!{Style.RESET_ALL}")
             return 0
-        
-        logger.error("Processing completed with status: failed")
+        else:
+            print(f"{Fore.RED}✗ Processing failed{Style.RESET_ALL}")
+            return 1
+            
+    except ConfigurationError as e:
+        print_error(f"Configuration error: {str(e)}")
+        logger.error("Configuration error", exc_info=True)
         return 1
         
     except Exception as e:
-        # Handle the case where logging might not be set up
-        error_msg = get_fallback_message('system_error', error=str(e))
-        try:
-            logger = get_logger(__name__)
-            logger.error(f"ERROR: {error_msg}")
-        except:
-            print(f"ERROR: {error_msg}")
+        print_error(f"Unexpected error: {str(e)}")
+        logger.error("Processing failed", exc_info=True)
         return 1
+        
+    finally:
+        logging.shutdown()
 
 if __name__ == "__main__":
     sys.exit(main())

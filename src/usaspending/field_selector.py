@@ -1,117 +1,148 @@
-"""Field selection and processing module for CSV to JSON conversion.
-
-This module provides functionality to intelligently select and process fields
-from transaction data based on priority levels defined in configuration.
-"""
+"""Field selection and extraction system."""
 from typing import Dict, Any, List, Set, Optional
-import logging
+from dataclasses import dataclass
+import re
 
-logger = logging.getLogger(__name__)
+from .interfaces import IFieldSelector
+from .logging_config import get_logger
 
-class FieldSelector:
-    """Handles field selection based on configuration priorities."""
+logger = get_logger(__name__)
+
+@dataclass
+class FieldPath:
+    """Represents a field path with array indexing."""
+    path: str
+    array_indices: Dict[str, int]
+
+class FieldSelector(IFieldSelector):
+    """Handles field selection and extraction from data."""
     
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize field selector with configuration.
+    def __init__(self, field_mappings: Dict[str, str],
+                 array_fields: Optional[Dict[str, str]] = None):
+        """Initialize selector with field mappings."""
+        self.field_mappings = field_mappings
+        self.array_fields = array_fields or {}
+        self.available_fields = set(field_mappings.values())
         
-        Args:
-            config: Full application configuration dictionary
-        """
-        self.config = config
-        self.field_config = config.get('contracts', {}).get('field_selection', {})
-        self.strategy = self.field_config.get('strategy', 'all')
+    def select_fields(self, data: Dict[str, Any],
+                     field_names: List[str]) -> Dict[str, Any]:
+        """Select specific fields from data."""
+        result = {}
         
-        # Build our field sets
-        self.essential_fields = set(self.field_config.get('essential_fields', []))
-        self.important_fields = set(self.field_config.get('important_fields', []))
-        self.optional_fields = set(self.field_config.get('optional_fields', []))
+        for field_name in field_names:
+            if field_name in self.field_mappings:
+                source_path = self.field_mappings[field_name]
+                value = self._extract_field(data, source_path)
+                if value is not None:
+                    result[field_name] = value
+                    
+        return result
         
-        # Cache of selected fields for performance
-        self._selected_fields_cache: Optional[Set[str]] = None
+    def get_available_fields(self) -> List[str]:
+        """Get list of available fields."""
+        return sorted(self.available_fields)
         
-        logger.info(f"Field selector initialized with strategy: {self.strategy}")
-        logger.info(f"Essential fields: {len(self.essential_fields)}, "
-                   f"Important fields: {len(self.important_fields)}, "
-                   f"Optional fields: {len(self.optional_fields)}")
-    
-    def get_selected_fields(self, all_field_names: List[str]) -> Set[str]:
-        """Get set of field names that should be processed based on strategy.
+    def _extract_field(self, data: Dict[str, Any], path: str) -> Any:
+        """Extract field value using dot notation path."""
+        # Parse field path
+        field_path = self._parse_field_path(path)
         
-        Args:
-            all_field_names: Complete list of available field names in the CSV
+        # Navigate through data
+        current = data
+        path_parts = field_path.path.split('.')
+        
+        for part in path_parts[:-1]:
+            base_part = part.split('[')[0]
             
-        Returns:
-            Set of field names that should be included based on strategy
-        """
-        # Return cached result if available
-        if self._selected_fields_cache is not None:
-            return self._selected_fields_cache
-            
-        if self.strategy == 'all' or not self.field_config.get('enabled', False):
-            # Include all fields
-            self._selected_fields_cache = set(all_field_names)
-            return self._selected_fields_cache
-        
-        elif self.strategy == 'explicit':
-            # Only include fields explicitly listed in any category
-            self._selected_fields_cache = (
-                self.essential_fields | 
-                self.important_fields | 
-                self.optional_fields
-            )
-            return self._selected_fields_cache
-        
-        elif self.strategy == 'priority':
-            # Include essential, important, and all other fields as optional
-            result = self.essential_fields | self.important_fields
-            
-            # If optional_fields is empty, include all remaining fields
-            if not self.optional_fields:
-                remaining_fields = set(all_field_names) - result
-                result |= remaining_fields
-            else:
-                result |= self.optional_fields
+            if base_part not in current:
+                return None
                 
-            self._selected_fields_cache = result
-            return result
-        
-        # Default to all fields if strategy not recognized
-        self._selected_fields_cache = set(all_field_names)
-        return self._selected_fields_cache
-    
-    def get_field_priority(self, field_name: str) -> str:
-        """Get priority level for a given field.
-        
-        Args:
-            field_name: Name of the field to check
+            current = current[base_part]
             
-        Returns:
-            Priority level: 'essential', 'important', 'optional', or 'excluded'
-        """
-        if field_name in self.essential_fields:
-            return 'essential'
-        elif field_name in self.important_fields:
-            return 'important'
-        elif field_name in self.optional_fields or not self.optional_fields:
-            return 'optional'
-        else:
-            return 'excluded'
-    
-    def filter_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        """Filter record to only include selected fields.
+            # Handle array indexing
+            if base_part in field_path.array_indices:
+                try:
+                    index = field_path.array_indices[base_part]
+                    if not isinstance(current, list) or index >= len(current):
+                        return None
+                    current = current[index]
+                except (IndexError, TypeError):
+                    return None
+                    
+        # Get final value
+        final_part = path_parts[-1]
+        base_part = final_part.split('[')[0]
         
-        Args:
-            record: Complete record with all fields
+        if base_part not in current:
+            return None
             
-        Returns:
-            Filtered record with only selected fields
-        """
-        if self.strategy == 'all' or not self.field_config.get('enabled', False):
-            return record
-            
-        selected_fields = self.get_selected_fields(list(record.keys()))
+        value = current[base_part]
         
-        return {
-            k: v for k, v in record.items() 
-            if k in selected_fields
-        }
+        # Handle array indexing for final part
+        if base_part in field_path.array_indices:
+            try:
+                index = field_path.array_indices[base_part]
+                if not isinstance(value, list) or index >= len(value):
+                    return None
+                value = value[index]
+            except (IndexError, TypeError):
+                return None
+                
+        return value
+        
+    def _parse_field_path(self, path: str) -> FieldPath:
+        """Parse field path with array indexing."""
+        array_indices = {}
+        clean_path = ""
+        current_part = ""
+        
+        i = 0
+        while i < len(path):
+            if path[i] == '[':
+                # Start of array index
+                part_name = current_part.split('.')[-1]
+                i += 1
+                index_str = ""
+                while i < len(path) and path[i] != ']':
+                    index_str += path[i]
+                    i += 1
+                try:
+                    array_indices[part_name] = int(index_str)
+                except ValueError:
+                    logger.warning(f"Invalid array index in path: {path}")
+                i += 1  # Skip closing bracket
+            else:
+                current_part += path[i]
+                if path[i] == '.' or i == len(path) - 1:
+                    clean_path += current_part
+                    current_part = ""
+                i += 1
+                
+        return FieldPath(
+            path=clean_path,
+            array_indices=array_indices
+        )
+        
+    def add_field_mapping(self, field_name: str,
+                         source_path: str) -> None:
+        """Add new field mapping."""
+        self.field_mappings[field_name] = source_path
+        self.available_fields.add(field_name)
+        
+    def remove_field_mapping(self, field_name: str) -> None:
+        """Remove field mapping."""
+        if field_name in self.field_mappings:
+            del self.field_mappings[field_name]
+            self.available_fields.remove(field_name)
+            
+    def get_field_source(self, field_name: str) -> Optional[str]:
+        """Get source path for field."""
+        return self.field_mappings.get(field_name)
+        
+    def get_array_field_info(self, field_name: str) -> Optional[str]:
+        """Get array field information."""
+        return self.array_fields.get(field_name)
+        
+    def is_array_field(self, field_name: str) -> bool:
+        """Check if field is an array field."""
+        return field_name in self.array_fields

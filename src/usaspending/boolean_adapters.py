@@ -1,135 +1,130 @@
-"""Boolean field adapters implementation."""
-from typing import Any, Dict, Optional, Union, Literal, List
-from pydantic import BaseModel, Field, field_validator
+"""Boolean field adapters for USASpending data validation."""
+from typing import Dict, Any, List, Optional, Set, Union, Mapping
 
-from .schema_adapters import PydanticAdapter, SchemaAdapterFactory
+from .interfaces import ISchemaAdapter
 
-class BooleanFieldAdapter(PydanticAdapter[str, bool]):
-    """Base adapter for boolean fields."""
+class BooleanFieldAdapter(ISchemaAdapter):
+    """Adapter for boolean field validation and transformation."""
     
-    def _create_model(self) -> type[BaseModel]:
-        """Create Pydantic model for boolean validation/transformation."""
-        true_values = self.config.get('true_values', ['true', 'yes', 'y', '1', 't'])
-        false_values = self.config.get('false_values', ['false', 'no', 'n', '0', 'f'])
-        case_sensitive = self.config.get('case_sensitive', False)
-        strict = self.config.get('strict', True)
-        
-        class BooleanModel(BaseModel):
-            value: bool = Field(description=f"True values: {true_values}, False values: {false_values}")
-            
-            @field_validator('value', mode='before')
-            @classmethod
-            def parse_bool(cls, v: Any) -> bool:
-                if isinstance(v, bool):
-                    return v
-                
-                if not isinstance(v, str):
-                    v = str(v)
-                
-                v = v.strip()
-                if not case_sensitive:
-                    v = v.lower()
-                    true_check = [str(t).lower() for t in true_values]
-                    false_check = [str(f).lower() for f in false_values]
-                else:
-                    true_check = [str(t) for t in true_values]
-                    false_check = [str(f) for f in false_values]
-                
-                if v in true_check:
-                    return True
-                if v in false_check:
-                    return False
-                
-                if not strict:
-                    # Basic truthy/falsy logic for non-strict mode
-                    if v in ('1', 't', 'true', 'yes', 'y'):
-                        return True
-                    if v in ('0', 'f', 'false', 'no', 'n'):
-                        return False
-                    
-                raise ValueError(
-                    f"Value must be one of: {', '.join(true_values)} for True "
-                    f"or {', '.join(false_values)} for False"
-                )
-        
-        return BooleanModel
+    # Standard values representing True and False
+    TRUE_VALUES = {'true', 'yes', '1', 'y', 't'}
+    FALSE_VALUES = {'false', 'no', '0', 'n', 'f'}
     
-    def _validate_config(self) -> None:
-        """Validate boolean adapter configuration."""
-        if 'true_values' in self.config and not isinstance(self.config['true_values'], (list, tuple)):
-            raise ValueError("'true_values' must be a list or tuple")
+    def __init__(self, true_values: Optional[Set[str]] = None,
+                 false_values: Optional[Set[str]] = None):
+        """Initialize boolean field adapter.
+        
+        Args:
+            true_values: Set of values representing True
+            false_values: Set of values representing False
+        """
+        self.true_values = true_values or self.TRUE_VALUES
+        self.false_values = false_values or self.FALSE_VALUES
+        self.errors: List[str] = []
+    
+    def validate(self, value: Any, field_name: str) -> bool:
+        """Validate value as a boolean.
+        
+        Args:
+            value: Value to validate
+            field_name: Field name for error messages
             
-        if 'false_values' in self.config and not isinstance(self.config['false_values'], (list, tuple)):
-            raise ValueError("'false_values' must be a list or tuple")
+        Returns:
+            True if value is a valid boolean representation, False otherwise
+        """
+        self.errors = []
+        
+        if value is None:
+            return True
+            
+        if isinstance(value, bool):
+            return True
+            
+        if isinstance(value, (int, float)):
+            # Accept numeric 0 and 1 as valid boolean values
+            if value == 0 or value == 1:
+                return True
+        
+        # Convert to lowercase string for string-based boolean values
+        if isinstance(value, str):
+            str_value = value.lower()
+            if str_value in self.true_values or str_value in self.false_values:
+                return True
+                
+        self.errors.append(
+            f"{field_name}: Value '{value}' is not a valid boolean"
+        )
+        return False
+    
+    def transform(self, value: Any, field_name: str) -> Optional[bool]:
+        """Transform value to a boolean.
+        
+        Args:
+            value: Value to transform
+            field_name: Field name (not used in this implementation)
+            
+        Returns:
+            Boolean value if valid, None otherwise
+        """
+        if value is None:
+            return None
+            
+        if isinstance(value, bool):
+            return value
+            
+        if isinstance(value, (int, float)):
+            if value == 1:
+                return True
+            elif value == 0:
+                return False
+            
+        if isinstance(value, str):
+            str_value = value.lower()
+            if str_value in self.true_values:
+                return True
+            elif str_value in self.false_values:
+                return False
+                
+        return None
+    
+    def get_validation_errors(self) -> List[str]:
+        """Get validation error messages.
+        
+        Returns:
+            List of validation error messages
+        """
+        return self.errors.copy()
 
 class FormattedBooleanAdapter(BooleanFieldAdapter):
-    """Boolean adapter with configurable output formatting."""
+    """Adapter that formats boolean output in a specific way."""
     
-    def _create_model(self) -> type[BaseModel]:
-        """Create Pydantic model for formatted boolean validation."""
-        output_format = self.config.get('output_format', {})
-        true_output = output_format.get('true', 'Y')
-        false_output = output_format.get('false', 'N')
+    def __init__(self, true_format: str = 'Yes',
+                 false_format: str = 'No',
+                 **kwargs):
+        """Initialize formatted boolean adapter.
         
-        class FormattedBooleanModel(BaseModel):
-            value: bool = Field(description=f"Boolean field (outputs: {true_output}/{false_output})")
-            true_format: str = Field(default=true_output)
-            false_format: str = Field(default=false_output)
-            
-            @field_validator('value', mode='before')
-            @classmethod
-            def parse_formatted_bool(cls, v: Any) -> bool:
-                if isinstance(v, bool):
-                    return v
-                
-                if not isinstance(v, str):
-                    v = str(v)
-                
-                v = v.strip().upper()
-                true_variations = cls._get_true_variations()
-                false_variations = cls._get_false_variations()
-                
-                if v in true_variations:
-                    return True
-                if v in false_variations:
-                    return False
-                
-                raise ValueError(
-                    f"Invalid boolean value. Must be one of: "
-                    f"{', '.join(true_variations)} for True or "
-                    f"{', '.join(false_variations)} for False"
-                )
-            
-            @classmethod
-            def _get_true_variations(cls) -> List[str]:
-                """Get standard true value variations."""
-                return ['Y', 'YES', 'TRUE', '1', 'T']
-            
-            @classmethod
-            def _get_false_variations(cls) -> List[str]:
-                """Get standard false value variations."""
-                return ['N', 'NO', 'FALSE', '0', 'F']
-            
-            def format_output(self) -> str:
-                """Format boolean value according to configuration."""
-                return self.true_format if self.value else self.false_format
-        
-        return FormattedBooleanModel
+        Args:
+            true_format: String to output for True values
+            false_format: String to output for False values
+            **kwargs: Additional arguments for BooleanFieldAdapter
+        """
+        super().__init__(**kwargs)
+        self.true_format = true_format
+        self.false_format = false_format
     
-    def _validate_config(self) -> None:
-        """Validate formatted boolean adapter configuration."""
-        super()._validate_config()
-        output_format = self.config.get('output_format', {})
-        if not isinstance(output_format, dict):
-            raise ValueError("'output_format' must be a dictionary")
+    def transform(self, value: Any, field_name: str) -> Any:
+        """Transform to formatted boolean string.
+        
+        Args:
+            value: Value to transform
+            field_name: Field name (not used in this implementation)
             
-        true_format = output_format.get('true')
-        false_format = output_format.get('false')
-        if true_format and not isinstance(true_format, str):
-            raise ValueError("'true' format must be a string")
-        if false_format and not isinstance(false_format, str):
-            raise ValueError("'false' format must be a string")
-
-# Register adapters with factory
-SchemaAdapterFactory.register('boolean', BooleanFieldAdapter)
-SchemaAdapterFactory.register('formatted_boolean', FormattedBooleanAdapter)
+        Returns:
+            Formatted string representation or None
+        """
+        bool_value = super().transform(value, field_name)
+        
+        if bool_value is None:
+            return None
+            
+        return self.true_format if bool_value else self.false_format

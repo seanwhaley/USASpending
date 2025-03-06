@@ -1,269 +1,259 @@
-"""Entity serialization and file operations."""
-from typing import Dict, Any, List, Optional
-from pathlib import Path
-import os
+"""Entity serialization system."""
+from typing import Dict, Any, List, Optional, TypeVar, Generic, Type
 import json
-import logging
-from datetime import datetime
+import csv
+from io import StringIO
+import dataclasses
+from datetime import datetime, date
+from decimal import Decimal
+from enum import Enum
+import yaml
 
-from .file_utils import (
-    write_json_file, read_json_file, ensure_directory, 
-    backup_file, safe_delete, atomic_replace, FileOperationError
-)
+from .interfaces import IEntitySerializer
+from .logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-class EntitySerializer:
-    """Handles entity serialization and file operations."""
+T = TypeVar('T')
 
-    def __init__(self, base_path: str, entity_type: str, encoding: str = "utf-8"):
-        """Initialize entity serializer.
+class SerializationError(Exception):
+    """Error during entity serialization."""
+    pass
+
+class EntitySerializer(IEntitySerializer[T]):
+    """Handles entity serialization to various formats."""
+    
+    def __init__(self, entity_class: Type[T]):
+        """Initialize serializer for entity type."""
+        self.entity_class = entity_class
         
-        Args:
-            base_path: Base path for entity storage
-            entity_type: Type of entity being serialized
-            encoding: Character encoding for files
-        """
-        self.base_path = base_path
-        self.entity_type = entity_type
-        self.encoding = encoding
-        self.file_path = f"{base_path}_{entity_type}.json"
-        self.temp_file_path = f"{self.file_path}.tmp"
+    def to_dict(self, entity: T) -> Dict[str, Any]:
+        """Convert entity to dictionary."""
+        if dataclasses.is_dataclass(entity):
+            return self._dataclass_to_dict(entity)
+        return self._object_to_dict(entity)
         
-    def get_base_metadata(self, stats: Dict[str, Any]) -> Dict[str, Any]:
-        """Get base metadata for entity output."""
-        return {
-            "entity_type": self.entity_type,
-            "total_references": stats.get("total", 0),
-            "unique_entities": stats.get("unique", 0),
-            "relationship_counts": stats.get("relationships", {}),
-            "skipped_entities": stats.get("skipped", {}),
-            "natural_keys_used": stats.get("natural_keys_used", 0),
-            "hash_keys_used": stats.get("hash_keys_used", 0),
-            "generated_date": datetime.now().isoformat()
-        }
+    def from_dict(self, data: Dict[str, Any]) -> T:
+        """Create entity from dictionary."""
+        if dataclasses.is_dataclass(self.entity_class):
+            return self._dict_to_dataclass(data)
+        return self._dict_to_object(data)
         
-    def estimate_json_size(self, cache: Dict[str, Dict[str, Any]], relationships: Dict[str, Any]) -> int:
-        """Estimate JSON output size in bytes."""
-        sample_size = min(100, len(cache))
-        if sample_size == 0:
-            return 0
-            
-        sample_keys = list(cache.keys())[:sample_size]
-        sample_data = {k: cache[k] for k in sample_keys}
-        
-        # Create sample output
-        sample_output = {
-            "metadata": {"sample": True},
-            "entities": sample_data,
-            "relationships": {k: {sk: list(v[sk]) for sk in list(v.keys())[:10]} 
-                            for k, v in relationships.items()}
-        }
-        
-        # Get sample size and extrapolate
-        sample_json = json.dumps(sample_output)
-        avg_entity_size = len(sample_json) / sample_size
-        
-        return int(avg_entity_size * len(cache))
-        
-    def save(self, cache: Dict[str, Dict[str, Any]], relationships: Dict[str, Any], 
-             stats: Dict[str, Any], indent: int = 2, max_file_size: int = 50 * 1024 * 1024) -> None:
-        """Save entities with atomic file operations and batching."""
+    def to_json(self, entity: T) -> str:
+        """Convert entity to JSON string."""
+        data = self.to_dict(entity)
         try:
-            logger.info(f"Starting save for {self.entity_type} store with {len(cache)} entities")
-            
-            # Create directory if needed
-            output_dir = os.path.dirname(self.file_path)
-            ensure_directory(output_dir)
-
-            # Estimate size and determine save strategy
-            estimated_size = self.estimate_json_size(cache, relationships)
-            logger.info(f"Estimated output size: {estimated_size/(1024*1024):.2f}MB")
-            
-            base_metadata = self.get_base_metadata(stats)
-            
-            if len(cache) > 10000 or estimated_size > max_file_size:
-                logger.info("Using partitioned save strategy")
-                self._save_partitioned(cache, relationships, base_metadata, indent)
-            else:
-                logger.info("Using single file save strategy")
-                self._save_single_file(cache, relationships, base_metadata, indent)
-
-            logger.info(f"Successfully saved {base_metadata['unique_entities']} {self.entity_type} entities")
-
+            return json.dumps(data, cls=EntityJSONEncoder)
         except Exception as e:
-            logger.error(f"Error saving entity store: {str(e)}", exc_info=True)
-            self._cleanup_temp_files()
-            raise
+            raise SerializationError(f"JSON serialization failed: {str(e)}")
             
-    def _save_single_file(self, cache: Dict[str, Dict[str, Any]], relationships: Dict[str, Any],
-                         metadata: Dict[str, Any], indent: int) -> None:
-        """Save all entities to a single file."""
+    def from_json(self, json_str: str) -> T:
+        """Create entity from JSON string."""
         try:
-            # Clean up any existing temp file first
-            self._cleanup_temp_files()
+            data = json.loads(json_str)
+            return self.from_dict(data)
+        except Exception as e:
+            raise SerializationError(f"JSON deserialization failed: {str(e)}")
             
-            # Create backup if file exists
-            if os.path.exists(self.file_path):
-                backup_file(self.file_path)
-            
-            # Prepare output data
-            output_data = {
-                "metadata": metadata,
-                "entities": cache,
-                "relationships": {k: {sk: list(v[sk]) for sk in v.keys()} 
-                                for k, v in relationships.items()}
-            }
-            
-            # Write data atomically
-            write_json_file(
-                self.file_path, 
-                output_data, 
-                encoding=self.encoding, 
-                indent=indent,
-                ensure_ascii=False,
-                atomic=True
+    def to_csv_row(self, entity: T) -> List[str]:
+        """Convert entity to CSV row."""
+        data = self.to_dict(entity)
+        return [str(data.get(field, '')) for field in self._get_field_names()]
+        
+    def from_csv_row(self, row: List[str], headers: List[str]) -> T:
+        """Create entity from CSV row."""
+        if len(row) != len(headers):
+            raise SerializationError(
+                f"CSV row length ({len(row)}) does not match headers ({len(headers)})"
             )
             
-        except Exception as e:
-            logger.error(f"Error saving single file: {str(e)}", exc_info=True)
-            self._cleanup_temp_files()
-            raise
-            
-    def _save_partitioned(self, cache: Dict[str, Dict[str, Any]], relationships: Dict[str, Any],
-                         metadata: Dict[str, Any], indent: int) -> None:
-        """Save large datasets in partitioned files with an index."""
+        data = dict(zip(headers, row))
+        return self.from_dict(data)
+        
+    def _dataclass_to_dict(self, entity: T) -> Dict[str, Any]:
+        """Convert dataclass instance to dictionary."""
         try:
-            base_path = self.file_path.rsplit('.', 1)[0]
-            logger.info(f"Starting partitioned save to {base_path}")
+            return dataclasses.asdict(entity)
+        except Exception as e:
+            raise SerializationError(f"Dataclass serialization failed: {str(e)}")
             
-            # Calculate partition size for ~25MB partitions
-            target_size = 25 * 1024 * 1024
-            sample_size = min(1000, len(cache))
-            sample_keys = list(cache.keys())[:sample_size]
-            sample_data = {k: cache[k] for k in sample_keys}
-            sample_json = json.dumps({"entities": sample_data})
-            avg_entity_size = len(sample_json) / sample_size
-            partition_size = max(100, min(10000, int(target_size / avg_entity_size)))
-            
-            logger.info(f"Calculated partition size: {partition_size} entities")
-            
-            # Create and save partitions
-            entities = list(cache.items())
-            partition_count = (len(entities) + partition_size - 1) // partition_size
-            
-            # Prepare index data
-            index_data: Dict[str, Any] = {
-                "metadata": metadata,
-                "partitions": [],
-                "relationships": {}
+    def _dict_to_dataclass(self, data: Dict[str, Any]) -> T:
+        """Create dataclass instance from dictionary."""
+        try:
+            field_types = {
+                field.name: field.type
+                for field in dataclasses.fields(self.entity_class)
             }
             
-            # Create temporary directory for atomic operations
-            temp_dir = Path(base_path).parent / ".tmp"
-            ensure_directory(str(temp_dir))
-            
-            created_files = []
-            try:
-                for i in range(0, len(entities), partition_size):
-                    partition_entities = dict(entities[i:i + partition_size])
-                    partition_file = f"{base_path}_part{i//partition_size}.json"
-                    partition_metadata = self._save_partition(
-                        partition_file, partition_entities, i//partition_size, indent)
-                    index_data["partitions"].append(partition_metadata)
-                    created_files.append(partition_file)
-                
-                # Add relationship information to index
-                for rel_type, rel_map in relationships.items():
-                    index_data["relationships"][rel_type] = {
-                        e: list(r) for e, r in rel_map.items()
-                    }
-                
-                # Save index file atomically
-                index_file = f"{base_path}_index.json"
-                temp_index_file = str(temp_dir / "index.json.tmp")
-                logger.info(f"Writing index file to {index_file}")
-                
-                write_json_file(
-                    index_file, 
-                    index_data, 
-                    encoding=self.encoding, 
-                    indent=indent, 
-                    ensure_ascii=False,
-                    atomic=True
-                )
-                created_files.append(index_file)
-                
-                logger.info(f"Successfully saved {partition_count} partitions with index")
-                
-            except Exception as e:
-                # Clean up any created files on error
-                for file in created_files:
-                    try:
-                        safe_delete(file)
-                    except Exception:
-                        pass
-                raise
-                
-            finally:
-                # Clean up temp directory
-                try:
-                    if temp_dir.exists():
-                        for file in temp_dir.iterdir():
-                            safe_delete(str(file))
-                        temp_dir.rmdir()
-                except OSError as e:
-                    logger.warning(f"Error cleaning up temp directory: {e}")
+            # Convert values to appropriate types
+            converted_data = {}
+            for key, value in data.items():
+                if key in field_types:
+                    converted_data[key] = self._convert_value(
+                        value, field_types[key]
+                    )
+                    
+            return self.entity_class(**converted_data)
             
         except Exception as e:
-            logger.error(f"Error in partitioned save: {str(e)}", exc_info=True)
-            raise
-            
-    def _save_partition(self, partition_file: str, partition: Dict[str, Dict[str, Any]], 
-                       partition_num: int, indent: int) -> Dict[str, Any]:
-        """Save a single partition to file."""
-        try:
-            # Prepare partition metadata
-            partition_metadata = {
-                "partition_number": partition_num,
-                "entity_count": len(partition),
-                "file_path": partition_file
-            }
-            
-            # Write partition to file
-            write_json_file(
-                partition_file,
-                {
-                    "metadata": partition_metadata,
-                    "entities": partition
-                },
-                encoding=self.encoding,
-                indent=indent,
-                ensure_ascii=False,
-                atomic=True
+            raise SerializationError(
+                f"Dataclass deserialization failed: {str(e)}"
             )
             
-            return partition_metadata
-            
-        except Exception as e:
-            logger.error(f"Error saving partition {partition_num}: {str(e)}", exc_info=True)
-            raise
-            
-    def _cleanup_temp_files(self) -> None:
-        """Clean up any temporary files."""
+    def _object_to_dict(self, entity: T) -> Dict[str, Any]:
+        """Convert object instance to dictionary."""
         try:
-            if os.path.exists(self.temp_file_path):
-                safe_delete(self.temp_file_path)
+            return {
+                key: value
+                for key, value in vars(entity).items()
+                if not key.startswith('_')
+            }
         except Exception as e:
-            logger.warning(f"Error cleaning up temp file: {str(e)}")
+            raise SerializationError(f"Object serialization failed: {str(e)}")
+            
+    def _dict_to_object(self, data: Dict[str, Any]) -> T:
+        """Create object instance from dictionary."""
+        try:
+            instance = self.entity_class()
+            for key, value in data.items():
+                if hasattr(instance, key):
+                    setattr(instance, key, value)
+            return instance
+        except Exception as e:
+            raise SerializationError(f"Object deserialization failed: {str(e)}")
+            
+    def _convert_value(self, value: Any, target_type: Type) -> Any:
+        """Convert value to target type."""
+        if value is None:
+            return None
+            
+        # Handle optional types
+        if hasattr(target_type, "__origin__") and target_type.__origin__ is Optional:
+            target_type = target_type.__args__[0]
+            
+        # Basic type conversions
+        if target_type == str:
+            return str(value)
+        elif target_type == int:
+            return int(value)
+        elif target_type == float:
+            return float(value)
+        elif target_type == bool:
+            return bool(value)
+        elif target_type == datetime:
+            if isinstance(value, str):
+                return datetime.fromisoformat(value)
+            return value
+        elif target_type == date:
+            if isinstance(value, str):
+                return datetime.fromisoformat(value).date()
+            return value
+        elif target_type == Decimal:
+            return Decimal(str(value))
+        elif issubclass(target_type, Enum):
+            return target_type(value)
+            
+        return value
+        
+    def _get_field_names(self) -> List[str]:
+        """Get field names for entity type."""
+        if dataclasses.is_dataclass(self.entity_class):
+            return [field.name for field in dataclasses.fields(self.entity_class)]
+        
+        # For regular objects, get public attributes
+        sample = self.entity_class()
+        return [
+            attr for attr in dir(sample)
+            if not attr.startswith('_') and not callable(getattr(sample, attr))
+        ]
 
-    def load(self) -> Optional[Dict[str, Any]]:
-        """Load entity data from disk."""
-        if not os.path.exists(self.file_path):
-            return None
-            
+class EntityJSONEncoder(json.JSONEncoder):
+    """JSON encoder for entity types."""
+    
+    def default(self, obj: Any) -> Any:
+        """Convert special types to JSON-serializable values."""
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        elif isinstance(obj, date):
+            return obj.isoformat()
+        elif isinstance(obj, Decimal):
+            return str(obj)
+        elif isinstance(obj, Enum):
+            return obj.value
+        elif dataclasses.is_dataclass(obj):
+            return dataclasses.asdict(obj)
+        return super().default(obj)
+
+class YAMLEntitySerializer(EntitySerializer[T]):
+    """Entity serializer with YAML support."""
+    
+    def to_yaml(self, entity: T) -> str:
+        """Convert entity to YAML string."""
+        data = self.to_dict(entity)
         try:
-            return read_json_file(self.file_path, encoding=self.encoding)
-        except FileOperationError as e:
-            logger.error(f"Error loading entity data: {str(e)}")
-            return None
+            return yaml.dump(data, sort_keys=False, default_flow_style=False)
+        except Exception as e:
+            raise SerializationError(f"YAML serialization failed: {str(e)}")
+            
+    def from_yaml(self, yaml_str: str) -> T:
+        """Create entity from YAML string."""
+        try:
+            data = yaml.safe_load(yaml_str)
+            return self.from_dict(data)
+        except Exception as e:
+            raise SerializationError(f"YAML deserialization failed: {str(e)}")
+
+class CSVEntitySerializer(EntitySerializer[T]):
+    """Enhanced CSV serializer for entities."""
+    
+    def __init__(self, entity_class: Type[T],
+                 field_order: Optional[List[str]] = None,
+                 delimiter: str = ',',
+                 quotechar: str = '"'):
+        """Initialize CSV serializer."""
+        super().__init__(entity_class)
+        self.field_order = field_order or self._get_field_names()
+        self.delimiter = delimiter
+        self.quotechar = quotechar
+        
+    def to_csv_string(self, entities: List[T]) -> str:
+        """Convert multiple entities to CSV string."""
+        output = StringIO()
+        writer = csv.writer(
+            output,
+            delimiter=self.delimiter,
+            quotechar=self.quotechar,
+            quoting=csv.QUOTE_MINIMAL
+        )
+        
+        # Write header
+        writer.writerow(self.field_order)
+        
+        # Write data rows
+        for entity in entities:
+            writer.writerow(self.to_csv_row(entity))
+            
+        return output.getvalue()
+        
+    def from_csv_string(self, csv_str: str) -> List[T]:
+        """Create multiple entities from CSV string."""
+        input_file = StringIO(csv_str)
+        reader = csv.reader(
+            input_file,
+            delimiter=self.delimiter,
+            quotechar=self.quotechar
+        )
+        
+        # Read header
+        try:
+            headers = next(reader)
+        except StopIteration:
+            raise SerializationError("Empty CSV data")
+            
+        # Read data rows
+        entities = []
+        for row in reader:
+            entity = self.from_csv_row(row, headers)
+            entities.append(entity)
+            
+        return entities

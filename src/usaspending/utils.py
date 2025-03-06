@@ -1,11 +1,32 @@
 """Utility functions and classes for data processing."""
 import re
 import json
-from datetime import datetime
+import keyword
+from datetime import datetime, date
 from typing import Any, Dict, List, Optional, Set, Union, Callable
 import logging
+from pathlib import Path
+import os
 
 logger = logging.getLogger(__name__)
+
+def camel_to_snake(name: str) -> str:
+    """Convert camelCase to snake_case."""
+    name = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', name)
+    return re.sub('([a-z0-9])([A-Z])', r'\1_\2', name).lower()
+
+def snake_to_camel(name: str) -> str:
+    """Convert snake_case to camelCase."""
+    components = name.split('_')
+    return components[0] + ''.join(x.title() for x in components[1:])
+
+def is_valid_identifier(name: str) -> bool:
+    """Check if a string is a valid Python identifier."""
+    return name.isidentifier() and not keyword.iskeyword(name)
+
+def strip_whitespace(s: Optional[str]) -> Optional[str]:
+    """Strip whitespace from a string, handling None values."""
+    return s.strip() if s is not None else None
 
 def generate_entity_key(entity_type: str, key_fields: Dict[str, Any]) -> str:
     """Generate a unique key for an entity based on key fields."""
@@ -14,6 +35,50 @@ def generate_entity_key(entity_type: str, key_fields: Dict[str, Any]) -> str:
     
     key_parts = [str(key_fields.get(k, '')) for k in sorted(key_fields.keys())]
     return f"{entity_type}:{':'.join(key_parts)}"
+
+def format_datetime(dt: Optional[Union[datetime, date]], fmt: str = "%Y-%m-%d") -> Optional[str]:
+    """Format a datetime object into a string using the specified format.
+    
+    Args:
+        dt: The datetime or date object to format
+        fmt: The format string to use (default: "%Y-%m-%d")
+        
+    Returns:
+        Formatted datetime string or None if input is None
+    """
+    if dt is None:
+        return None
+    return dt.strftime(fmt)
+
+def validate_path(path: Union[str, Path], must_exist: bool = True, check_writable: bool = False) -> bool:
+    """Validate that a path exists and has correct permissions.
+    
+    Args:
+        path: Path to validate
+        must_exist: Whether the path must already exist
+        check_writable: Whether to check if path is writable
+        
+    Returns:
+        True if path is valid according to criteria, False otherwise
+    """
+    try:
+        path_obj = Path(path)
+        
+        if must_exist and not path_obj.exists():
+            return False
+            
+        if check_writable:
+            # Check parent directory is writable if path doesn't exist
+            target = path_obj.parent if not path_obj.exists() else path_obj
+            try:
+                if not os.access(str(target), os.W_OK):
+                    return False
+            except OSError:
+                return False
+                
+        return True
+    except Exception:
+        return False
 
 class TypeConverter:
     """Converts and validates data types based on configuration."""

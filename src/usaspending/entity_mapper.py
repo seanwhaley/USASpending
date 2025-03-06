@@ -1,222 +1,383 @@
-"""Entity data mapping and conversion functionality."""
-from typing import Dict, Any, Optional, Union
-import logging
-from .utils import TypeConverter
+"""Entity mapping functionality for transforming data."""
+from typing import Dict, Any, Optional, List, Set, Union
+from dataclasses import dataclass
+import re
+from csv import DictReader
+
+from . import get_logger, ConfigurationError
+from .validation_base import BaseValidator
+from .text_file_cache import TextFileCache
 from .exceptions import EntityMappingError
-from .keys import CompositeKey
+from .interfaces import IEntityMapper
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-class EntityMapper:
-    """Maps source data to entity fields based on configuration."""
+class EntityMapper(BaseValidator):
+    """Maps data between different entity formats."""
     
-    def __init__(self, config: Dict[str, Any], entity_type: str):
-        """
-        Initialize entity mapper.
+    def __init__(self, config: Dict[str, Any]):
+        """Initialize entity mapper with configuration."""
+        super().__init__()
+        self._config = config
+        self._mapping_cache: Dict[str, Dict[str, Any]] = {}
+        self._file_cache = TextFileCache()
+        self._mapped_fields: Set[str] = set()
         
-        Args:
-            config: Configuration dictionary or instance
-            entity_type: Type of entity to map
-        """
-        self.entity_type = entity_type
-        self.config = config
-        self.field_mapping = self._get_field_mapping()
-    
-    def _get_field_mapping(self) -> Dict:
-        """Get field mapping for the entity type from config."""
-        entities_config = self.config.get("entities", {})
-        entity_config = entities_config.get(self.entity_type, {})
+        # Store entity definitions for quick lookup
+        self.entities = self._config.get('entities', {})
+        self.field_properties = self._config.get('field_properties', {})
         
-        if not entity_config or "field_mappings" not in entity_config:
-            raise EntityMappingError(f"No field mapping found for entity type: {self.entity_type}")
-        return entity_config["field_mappings"]
-    
-    def extract_entity_data(self, source_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract entity data from source data based on mappings."""
-        # Check for required key fields
-        entity_config = self.config.get("entities", {}).get(self.entity_type, {})
-        key_fields = entity_config.get("key_fields", [])
+        # Create ordered list of entities by processing order
+        self.entity_order = sorted(
+            [(name, cfg.get('entity_processing', {}).get('processing_order', 999))
+             for name, cfg in self.entities.items()],
+            key=lambda x: x[1]
+        )
         
-        # Skip records missing required key fields
-        for key_field in key_fields:
-            if key_field not in source_data or not source_data[key_field]:
-                return None
+        logger.debug(f"Initialized EntityMapper with {len(self.entities)} entity definitions")
         
-        result = {}
-        
-        # Process different mapping categories
-        if "direct" in self.field_mapping:
-            self._map_direct_fields(source_data, result)
-        
-        if "multi_source" in self.field_mapping:
-            self._map_multi_source_fields(source_data, result)
-        
-        if "object" in self.field_mapping:
-            self._map_object_fields(source_data, result)
-        
-        if "reference" in self.field_mapping:
-            self._map_reference_fields(source_data, result)
-        
-        if "template" in self.field_mapping:
-            self._map_template_fields(source_data, result)
-        
-        return result
-    
-    def _map_direct_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map fields with direct 1:1 mapping."""
-        for target_field, mapping in self.field_mapping["direct"].items():
-            source_field_name = mapping.get("field") if isinstance(mapping, dict) else mapping
-            
-            if source_field_name in source_data:
-                value = source_data[source_field_name]
-                
-                # Apply transformation if configured
-                if isinstance(mapping, dict) and "transformation" in mapping:
-                    try:
-                        # Create a type converter and apply the transformation
-                        converter = TypeConverter(self.config)
-                        transform_type = mapping["transformation"].get("type")
-                        if transform_type:
-                            value = converter.convert_value(value, transform_type)
-                            if value is None:
-                                # Skip if transformation failed
-                                continue
-                    except Exception as e:
-                        logger.warning(f"Transformation error for {target_field}: {str(e)}")
-                        continue
-                        
-                result[target_field] = value
-    
-    def _map_multi_source_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map fields that combine multiple source fields."""
-        for target_field, mapping_config in self.field_mapping["multi_source"].items():
-            if "fields" not in mapping_config:
-                logger.warning(f"Invalid multi_source mapping for {target_field}")
-                continue
-                
-            source_values = []
-            for field in mapping_config["fields"]:
-                if field in source_data:
-                    source_values.append(source_data[field])
-            
-            if source_values:
-                if mapping_config.get("combine_function") == "concatenate":
-                    separator = " "  # Default separator
-                    result[target_field] = separator.join(str(v) for v in source_values if v is not None)
-    
-    def _map_object_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map nested object fields."""
-        for target_field, mapping_config in self.field_mapping["object"].items():
-            if "fields" not in mapping_config:
-                continue
-            
-            # Create the nested object structure
-            if target_field not in result:
-                result[target_field] = {}
-                
-            nested_result = result[target_field]
-            
-            for prop_name, prop_mapping in mapping_config["fields"].items():
-                source_field = prop_mapping.get("field") if isinstance(prop_mapping, dict) else prop_mapping
-                
-                if source_field and source_field in source_data:
-                    value = source_data[source_field]
-                    
-                    # Apply transformation if configured
-                    if isinstance(prop_mapping, dict) and "transformation" in prop_mapping:
-                        try:
-                            converter = TypeConverter(self.config)
-                            transform_type = prop_mapping["transformation"].get("type")
-                            if transform_type:
-                                value = converter.convert_value(value, transform_type)
-                                if value is None:
-                                    # Skip just this field if transformation or validation failed
-                                    continue
-                        except Exception as e:
-                            logger.warning(f"Transformation error for {prop_name}: {str(e)}")
-                            continue
-                    
-                    nested_result[prop_name] = value
-    
-    def _map_reference_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map fields that reference other entities."""
-        for target_field, mapping_config in self.field_mapping.get("reference", {}).items():
-            if "entity_type" not in mapping_config or "fields" not in mapping_config:
-                continue
-                
-            ref_data = {}
-            for field_name, field_config in mapping_config["fields"].items():
-                source_field = field_config.get("field")
-                if source_field and source_field in source_data:
-                    value = source_data[source_field]
-                    # Apply any transformations if configured
-                    if isinstance(field_config, dict) and "transformation" in field_config:
-                        try:
-                            converter = TypeConverter(self.config)
-                            transform_type = field_config["transformation"].get("type")
-                            if transform_type:
-                                value = converter.convert_value(value, transform_type)
-                                if value is None:
-                                    continue
-                        except Exception as e:
-                            logger.warning(f"Transformation error for {field_name}: {str(e)}")
-                            continue
-                    ref_data[field_name] = value
-            
-            if ref_data:
-                result[target_field] = {
-                    "type": mapping_config["entity_type"],
-                    "data": ref_data
-                }
-    
-    def _map_template_fields(self, source_data: Dict[str, Any], result: Dict[str, Any]) -> None:
-        """Map fields using template strings."""
-        for target_field, mapping_config in self.field_mapping["template"].items():
-            if "template" not in mapping_config or "fields" not in mapping_config:
-                continue
-                
-            template = mapping_config["template"]
-            # Create a dictionary of field values for template formatting
-            template_values = {}
-            for key, source_field in mapping_config["fields"].items():
-                if source_field in source_data:
-                    template_values[key] = source_data[source_field]
-                else:
-                    template_values[key] = ""
-                    
-            # Apply template
-            try:
-                result[target_field] = template.format(**template_values)
-            except (KeyError, ValueError) as e:
-                logger.warning(f"Template formatting error for {target_field}: {str(e)}")
-    
-    def build_key(self, entity_data: Dict[str, Any]) -> Optional[Union[str, Dict[str, str], CompositeKey]]:
-        """Build entity key from data."""
-        entity_config = self.config.get("entities", {}).get(self.entity_type, {})
-        key_fields = entity_config.get("key_fields", [])
-        
-        if not key_fields:
-            return None
-            
-        if isinstance(key_fields, str):
-            # Single field key
-            if key_fields not in entity_data:
-                return None
-            return str(entity_data[key_fields])
-            
-        elif isinstance(key_fields, list):
-            # Composite key
-            key_parts = {}
-            for field in key_fields:
-                if field not in entity_data:
-                    return None
-                key_parts[field] = str(entity_data[field])
-            return CompositeKey(key_parts)
-            
+    def _ensure_dict_data(self, data: Any) -> Dict[str, Any]:
+        """Ensure data is in dictionary format."""
+        if isinstance(data, dict):
+            return data
+        elif hasattr(data, '_asdict'):  # Handle namedtuple-like objects
+            return data._asdict()
+        elif hasattr(data, 'items'):  # Handle dict-like objects
+            return dict(data.items())
+        elif isinstance(data, (list, tuple)) and len(data) >= 2:
+            return dict(data)
+        else:
+            logger.warning(f"Could not convert data to dictionary: {type(data)}")
+            return {}
+
+    def _get_field_value_from_sources(self, data: Dict[str, Any], sources: List[str]) -> Optional[Any]:
+        """Get first non-empty value from multiple source fields."""
+        for source in sources:
+            if source in data and data[source]:
+                return data[source]
         return None
 
-    def transform_money(self, value: str, config: dict) -> float:
-        """Transform money values by stripping characters and converting to float."""
-        if isinstance(value, str):
-            return float(value.strip(config.get('strip_characters', '$,')))
-        return value
+    def _generate_agency_key(self, data: Dict[str, Any], multi_source: Dict[str, Any]) -> Optional[str]:
+        """Generate a unique key for an agency entity using composite fields."""
+        # Get values for all key components
+        agency_code = self._get_field_value_from_sources(data, multi_source.get('agency_code', {}).get('sources', []))
+        sub_agency_code = self._get_field_value_from_sources(data, multi_source.get('sub_agency_code', {}).get('sources', []))
+        office_code = self._get_field_value_from_sources(data, multi_source.get('office_code', {}).get('sources', []))
+        
+        # Agency code is required
+        if not agency_code:
+            return None
+            
+        # Build composite key with available parts
+        key_parts = [agency_code]
+        if sub_agency_code:
+            key_parts.append(sub_agency_code)
+        if office_code:
+            key_parts.append(office_code)
+            
+        return ':'.join(key_parts)
+
+    def _check_key_fields(self, data: Dict[str, Any], entity_type: str) -> bool:
+        """Check if data contains required key fields for entity type."""
+        entity_config = self.entities.get(entity_type, {})
+        key_fields = entity_config.get('key_fields', [])
+        field_mappings = entity_config.get('field_mappings', {})
+        
+        # For agency specifically, check multi-source mappings to ensure we have complete key
+        if entity_type == 'agency':
+            multi_source = field_mappings.get('multi_source', {})
+            agency_key = self._generate_agency_key(data, multi_source)
+            return agency_key is not None
+        
+        # For other entities, check direct and multi-source mappings for key fields
+        for key_field in key_fields:
+            # Check direct mappings first
+            direct_mappings = field_mappings.get('direct', {})
+            if key_field in direct_mappings:
+                mapping = direct_mappings[key_field]
+                if isinstance(mapping, str) and mapping in data:
+                    return True
+                elif isinstance(mapping, dict):
+                    source_field = mapping.get('field')
+                    if source_field and source_field in data:
+                        return True
+                        
+            # Then check multi-source mappings
+            multi_source = field_mappings.get('multi_source', {})
+            if key_field in multi_source:
+                sources = multi_source[key_field].get('sources', [])
+                if any(source in data and data[source] for source in sources):
+                    return True
+                    
+        return False
+
+    def _determine_entity_type(self, data: Dict[str, Any]) -> Optional[str]:
+        """Determine entity type from data based on entity definitions."""
+        field_values = self._ensure_dict_data(data)
+        
+        # Check entities in processing order
+        for entity_type, order in self.entity_order:
+            if self._check_key_fields(field_values, entity_type):
+                logger.debug(f"Determined entity type: {entity_type} with processing order {order}")
+                return entity_type
+                
+        logger.debug(f"Could not determine entity type from fields: {list(field_values.keys())}")
+        return None
+
+    def _apply_direct_mappings(self, data: Dict[str, Any], mappings: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply direct field mappings."""
+        result = {}
+        for target_field, mapping in mappings.items():
+            if isinstance(mapping, str):
+                # Direct string mapping
+                if mapping in data:
+                    value = data[mapping]
+                    if self.validate_field(mapping, value):
+                        result[target_field] = value
+                        self._mapped_fields.add(target_field)
+            elif isinstance(mapping, dict):
+                # Dictionary mapping with 'field' property
+                source_field = mapping.get('field')
+                if source_field and source_field in data:
+                    value = data[source_field]
+                    if self.validate_field(source_field, value):
+                        result[target_field] = value
+                        self._mapped_fields.add(target_field)
+        return result
+
+    def _apply_multi_source_mappings(self, data: Dict[str, Any], mappings: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply multi-source field mappings."""
+        result = {}
+        for target_field, mapping in mappings.items():
+            if isinstance(mapping, dict):
+                sources = mapping.get('sources', [])
+                strategy = mapping.get('strategy', 'first_non_empty')
+                
+                if strategy == 'first_non_empty':
+                    value = self._get_field_value_from_sources(data, sources)
+                    if value is not None:
+                        if self.validate_field(sources[0], value):  # Validate using first source field
+                            result[target_field] = value
+                            self._mapped_fields.add(target_field)
+                            logger.debug(f"Mapped {target_field} from multi-source: {value}")
+        return result
+
+    def _apply_object_mappings(self, data: Dict[str, Any], mappings: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply object field mappings."""
+        result = {}
+        for target_field, mapping in mappings.items():
+            if isinstance(mapping, dict) and mapping.get('type') == 'object':
+                fields = mapping.get('fields', {})
+                obj_result = {}
+                for obj_field, field_mapping in fields.items():
+                    if isinstance(field_mapping, dict):
+                        source = field_mapping.get('field')
+                        if source and source in data:
+                            obj_result[obj_field] = data[source]
+                    elif isinstance(field_mapping, str) and field_mapping in data:
+                        obj_result[obj_field] = data[field_mapping]
+                if obj_result:
+                    result[target_field] = obj_result
+        return result
+
+    def _apply_reference_mappings(self, data: Dict[str, Any], mappings: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply reference field mappings."""
+        result = {}
+        for target_field, mapping in mappings.items():
+            if isinstance(mapping, dict) and mapping.get('type') == 'entity_reference':
+                entity_type = mapping.get('entity')
+                
+                # Handle key_field directly defined
+                if 'key_field' in mapping and mapping['key_field'] in data:
+                    key_value = data[mapping['key_field']]
+                    if key_value:
+                        result[target_field] = {
+                            'entity_type': entity_type,
+                            'data': {'id': key_value}
+                        }
+                        logger.debug(f"Created reference {target_field} to {entity_type} with key {key_value}")
+                
+                # Handle composite keys with key_fields
+                elif 'key_fields' in mapping:
+                    key_prefix = mapping.get('key_prefix', '')
+                    key_values = {}
+                    for key_field in mapping['key_fields']:
+                        field_name = f"{key_prefix}_{key_field}" if key_prefix else key_field
+                        if field_name in data and data[field_name]:
+                            key_values[key_field] = data[field_name]
+                    
+                    if key_values:
+                        result[target_field] = {
+                            'entity_type': entity_type,
+                            'reference_type': mapping.get('reference_type', 'default'),
+                            'data': key_values
+                        }
+        return result
+        
+    def map_entity(self, data: Any) -> Dict[str, Any]:
+        """Map data to entity format using configuration mappings."""
+        result = {}
+        self.errors.clear()
+        
+        try:
+            # Convert input to dictionary format
+            data_dict = self._ensure_dict_data(data)
+            
+            # Determine entity type from entity definitions
+            entity_type = self._determine_entity_type(data_dict)
+            if not entity_type:
+                return {}
+                
+            # Get entity configuration
+            entity_config = self.entities.get(entity_type, {})
+            if not entity_config:
+                logger.error(f"Missing configuration for entity type: {entity_type}")
+                return {}
+                
+            # Add entity type to result
+            result['entity_type'] = entity_type
+            
+            # Apply field mappings from entity definition
+            field_mappings = entity_config.get('field_mappings', {})
+            
+            # Special handling for agency entities
+            if entity_type == 'agency':
+                multi_source = field_mappings.get('multi_source', {})
+                # Generate unique agency ID first
+                agency_key = self._generate_agency_key(data_dict, multi_source)
+                if agency_key:
+                    result['id'] = agency_key
+                    # Apply field mappings
+                    agency_fields = self._apply_multi_source_mappings(data_dict, multi_source)
+                    result.update(agency_fields)
+                    logger.debug(f"Mapped agency fields for {agency_key}: {list(agency_fields.keys())}")
+                else:
+                    return {}
+            else:
+                # Apply regular field mappings for other entities
+                direct_mappings = field_mappings.get('direct', {})
+                result.update(self._apply_direct_mappings(data_dict, direct_mappings))
+                
+                multi_source = field_mappings.get('multi_source', {})
+                result.update(self._apply_multi_source_mappings(data_dict, multi_source))
+                
+                object_mappings = field_mappings.get('object', {})
+                result.update(self._apply_object_mappings(data_dict, object_mappings))
+                
+                reference_mappings = field_mappings.get('reference', {})
+                result.update(self._apply_reference_mappings(data_dict, reference_mappings))
+
+            # Log mapping results
+            logger.debug(f"Mapped {len(self._mapped_fields)} fields for {entity_type} entity")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Entity mapping failed: {str(e)}", exc_info=True)
+            raise EntityMappingError(f"Failed to map entity: {str(e)}")
+
+    def _validate_field_value(self, field_name: str, value: Any,
+                          validation_context: Optional[Dict[str, Any]] = None) -> bool:
+        """Validate field value using field properties from config."""
+        try:
+            # Find matching field property type
+            for type_name, type_config in self.field_properties.items():
+                fields = type_config.get('fields', [])
+                
+                # Check exact match
+                if field_name in fields:
+                    validation = type_config.get('validation', {})
+                    return self._apply_validation_rules(value, validation, validation_context)
+                    
+                # Check pattern match
+                for field_pattern in fields:
+                    if '*' in field_pattern:
+                        pattern = field_pattern.replace('*', '.*')
+                        if re.match(pattern, field_name):
+                            validation = type_config.get('validation', {})
+                            return self._apply_validation_rules(value, validation, validation_context)
+            
+            return True  # No validation rules found
+            
+        except Exception as e:
+            logger.error(f"Validation error for {field_name}: {str(e)}")
+            self.errors.append(f"Field validation failed: {str(e)}")
+            return False
+            
+    def _apply_validation_rules(self, value: Any, validation: Dict[str, Any],
+                             context: Optional[Dict[str, Any]] = None) -> bool:
+        """Apply validation rules from configuration."""
+        # Get validation type and rules
+        validation_type = validation.get('type')
+        if not validation_type:
+            return True
+            
+        try:
+            if validation_type == 'string':
+                if not isinstance(value, str):
+                    return False
+                pattern = validation.get('pattern')
+                if pattern and not re.match(pattern, value):
+                    return False
+                max_length = validation.get('max_length')
+                if max_length and len(value) > max_length:
+                    return False
+                    
+            elif validation_type == 'integer':
+                try:
+                    int_value = int(value)
+                    min_value = validation.get('min_value')
+                    max_value = validation.get('max_value')
+                    if min_value is not None and int_value < min_value:
+                        return False
+                    if max_value is not None and int_value > max_value:
+                        return False
+                except (ValueError, TypeError):
+                    return False
+                    
+            elif validation_type == 'decimal':
+                try:
+                    float_value = float(value)
+                    min_value = validation.get('min_value')
+                    max_value = validation.get('max_value')
+                    if min_value is not None and float_value < min_value:
+                        return False
+                    if max_value is not None and float_value > max_value:
+                        return False
+                except (ValueError, TypeError):
+                    return False
+                    
+            elif validation_type == 'enum':
+                allowed_values = validation.get('values', {})
+                return str(value).upper() in (v.upper() for v in allowed_values)
+                
+            elif validation_type == 'boolean':
+                true_values = validation.get('true_values', [])
+                false_values = validation.get('false_values', [])
+                str_value = str(value).lower()
+                return str_value in (v.lower() for v in true_values + false_values)
+                
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error applying validation rules: {str(e)}")
+            return False
+            
+    def get_mapping_errors(self) -> List[str]:
+        """Get mapping error messages."""
+        return self.get_validation_errors()
+        
+    def get_mapping_stats(self) -> Dict[str, Any]:
+        """Get mapping statistics."""
+        stats = self.get_validation_stats()
+        stats.update({
+            'mapped_fields': len(self._mapped_fields)
+        })
+        return stats
+        
+    def clear_caches(self) -> None:
+        """Clear all mapping caches."""
+        super().clear_cache()
+        self._mapping_cache.clear()
+        self._file_cache.clear()
+        self._mapped_fields.clear()

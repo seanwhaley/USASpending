@@ -4,7 +4,11 @@ import pytest
 from typing import Dict, Any
 from decimal import Decimal
 from datetime import datetime, date
+from pathlib import Path
+import tempfile
+import yaml
 
+from usaspending.dictionary import Dictionary, FieldDefinition
 from usaspending.schema_adapters import (
     SchemaAdapterFactory, AdapterTransform,
     DateFieldAdapter, DecimalFieldAdapter
@@ -171,3 +175,193 @@ def test_basic_transformations(transformation, config, expected):
     
     result = adapter.process(config)
     assert result == expected
+
+def test_dictionary_initialization():
+    """Test initializing Dictionary with configuration."""
+    config = {
+        'field_properties': {
+            'test_field': {
+                'type': 'string',
+                'description': 'Test field',
+                'required': True,
+                'is_key': False,
+                'validation': {
+                    'rules': ['min_length:3'],
+                    'groups': ['basic']
+                },
+                'transformation': {
+                    'operations': [
+                        {'type': 'trim'},
+                        {'type': 'uppercase'}
+                    ]
+                }
+            }
+        }
+    }
+    
+    dictionary = Dictionary(config)
+    
+    # Check field definition
+    field = dictionary.get_field('test_field')
+    assert field is not None
+    assert field.type == 'string'
+    assert field.description == 'Test field'
+    assert field.is_required
+    assert not field.is_key
+    assert field.validation_rules == ['min_length:3']
+    assert field.groups == ['basic']
+    assert len(field.transformations) == 2
+    
+    # Check adapter creation
+    assert 'test_field' in dictionary.adapters
+
+def test_field_validation():
+    """Test field validation functionality."""
+    config = {
+        'field_properties': {
+            'amount': {
+                'type': 'decimal',
+                'validation': {
+                    'rules': ['min_value:0', 'max_value:1000000']
+                }
+            }
+        }
+    }
+    
+    dictionary = Dictionary(config)
+    
+    # Test valid value
+    assert not dictionary.validate_field('amount', 500.00)
+    
+    # Test invalid value
+    errors = dictionary.validate_field('amount', -100.00)
+    assert errors
+    assert any('min_value' in error for error in errors)
+
+def test_field_transformation():
+    """Test field transformation functionality."""
+    config = {
+        'field_properties': {
+            'code': {
+                'type': 'string',
+                'transformation': {
+                    'operations': [
+                        {'type': 'trim'},
+                        {'type': 'uppercase'}
+                    ]
+                }
+            }
+        }
+    }
+    
+    dictionary = Dictionary(config)
+    
+    # Test transformation
+    result = dictionary.transform_field('code', ' abc123 ')
+    assert result == 'ABC123'
+
+def test_dictionary_from_csv():
+    """Test creating Dictionary from CSV file."""
+    config = {'field_properties': {}}
+    
+    # Create temporary CSV file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False, newline='') as f:
+        f.write('field_name,type,description,required,is_key\n')
+        f.write('id,string,Unique identifier,true,true\n')
+        f.write('name,string,Entity name,true,false\n')
+        temp_path = Path(f.name)
+    
+    try:
+        # Create dictionary from CSV
+        dictionary = Dictionary.from_csv(temp_path, config)
+        
+        # Check fields loaded from CSV
+        assert len(dictionary.fields) == 2
+        
+        id_field = dictionary.get_field('id')
+        assert id_field.type == 'string'
+        assert id_field.description == 'Unique identifier'
+        assert id_field.is_required
+        assert id_field.is_key
+        
+        # Check key fields
+        key_fields = dictionary.get_key_fields()
+        assert len(key_fields) == 1
+        assert 'id' in key_fields
+        
+        # Check required fields
+        required_fields = dictionary.get_required_fields()
+        assert len(required_fields) == 2
+        assert 'id' in required_fields
+        assert 'name' in required_fields
+        
+    finally:
+        temp_path.unlink()
+
+def test_field_groups():
+    """Test field group functionality."""
+    config = {
+        'field_properties': {
+            'amount': {
+                'type': 'decimal',
+                'validation': {
+                    'groups': ['monetary', 'summary']
+                }
+            },
+            'total': {
+                'type': 'decimal',
+                'validation': {
+                    'groups': ['monetary', 'required']
+                }
+            }
+        }
+    }
+    
+    dictionary = Dictionary(config)
+    
+    # Test getting fields by group
+    monetary_fields = dictionary.get_fields_by_group('monetary')
+    assert len(monetary_fields) == 2
+    assert 'amount' in monetary_fields
+    assert 'total' in monetary_fields
+    
+    summary_fields = dictionary.get_fields_by_group('summary')
+    assert len(summary_fields) == 1
+    assert 'amount' in summary_fields
+
+def test_dictionary_to_json():
+    """Test saving Dictionary to JSON file."""
+    config = {
+        'field_properties': {
+            'test_field': {
+                'type': 'string',
+                'description': 'Test field',
+                'validation': {
+                    'rules': ['required'],
+                    'groups': ['basic']
+                }
+            }
+        }
+    }
+    
+    dictionary = Dictionary(config)
+    
+    # Save to temporary JSON file
+    with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as f:
+        temp_path = Path(f.name)
+    
+    try:
+        dictionary.to_json(temp_path)
+        
+        # Read and verify JSON
+        with open(temp_path) as f:
+            import json
+            data = json.load(f)
+        
+        assert 'fields' in data
+        assert 'test_field' in data['fields']
+        assert data['fields']['test_field']['type'] == 'string'
+        assert data['fields']['test_field']['description'] == 'Test field'
+        
+    finally:
+        temp_path.unlink()

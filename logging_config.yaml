@@ -3,9 +3,7 @@ disable_existing_loggers: false
 
 formatters:
   standard:
-    format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  detailed:
-    format: "%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s"
+    format: "%(asctime)s - %(levelname)s - %(message)s"
 
 handlers:
   console:
@@ -20,33 +18,18 @@ handlers:
     formatter: standard
     filename: logs/usaspending.log
     maxBytes: 10485760  # 10MB
-    backupCount: 5
+    backupCount: 3
     encoding: utf8
-    mode: a
-    delay: false
 
   debug_file:
     class: logging.handlers.RotatingFileHandler
     level: DEBUG
-    formatter: detailed
+    formatter: standard
     filename: logs/debug.log
     maxBytes: 10485760  # 10MB
-    backupCount: 5
+    backupCount: 3
     encoding: utf8
-    mode: a
-    delay: false
-
-loggers:
-  src.usaspending:
-    level: INFO
-    handlers: [console, file, debug_file]
-    propagate: false
-
-  __main__:
-    level: INFO
-    handlers: [console, file, debug_file]
-    propagate: false
 
 root:
-  level: INFO
+  level: DEBUG  # Changed from INFO to DEBUG
   handlers: [console, file, debug_file]

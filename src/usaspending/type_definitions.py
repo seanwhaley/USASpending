@@ -257,5 +257,24 @@ RelationshipMap = Dict[str, Dict[str, Set[str]]]
 EntityCache = Dict[str, EntityData]
 TypeRegistry = Dict[str, type]
 
+# Types namespace class
+class Types:
+    """Namespace for type-related constants and helpers."""
+    ENTITY_DATA = EntityData
+    VALIDATION_RULE = ValidationRule
+    VALIDATION_RESULT = ValidationResult
+    ENTITY_STATS = EntityStats
+    CHUNK_INFO = ChunkInfo
+    
+    @staticmethod
+    def get_type(name: str) -> Optional[Type]:
+        """Get a registered type class by name."""
+        return get_registered_type(name)
+    
+    @staticmethod
+    def register_type(name: str, type_class: Type) -> None:
+        """Register an entity type class."""
+        register_entity_type(name, type_class)
+
 # Register built-in types
 register_entity_type('recipient', EntityData)

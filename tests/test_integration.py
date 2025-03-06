@@ -1,4 +1,4 @@
-"""Integration tests for entity processing pipeline."""
+"""Integration tests for entity processing pipeline and transaction management and chunked writer."""
 import pytest
 import os
 import json

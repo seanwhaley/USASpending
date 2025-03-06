@@ -1,571 +1,637 @@
-"""Entity store implementation with integrated relationship management."""
-from typing import Dict, Any, Optional, Set, List, Union, Iterator, Tuple, DefaultDict
-from collections import defaultdict
-from itertools import chain
+"""Entity storage system for persisting entities."""
+from typing import Dict, Any, List, Optional, TypeVar, Generic, Iterator, Iterable
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 import json
-import logging
-from pathlib import Path
+import os
+import threading
+import time
+from datetime import datetime
+import sqlite3
+from contextlib import contextmanager
+import gzip
+import shutil
+import pathlib
+from concurrent.futures import ThreadPoolExecutor
 
-from .config import ConfigManager
-from .validation import ValidationEngine
-from .entity_cache import EntityCache, get_entity_cache
-from .entity_mapper import EntityMapper
-from .entity_serializer import EntitySerializer
-from .utils import generate_entity_key
-from .exceptions import TransformationError
-from .keys import CompositeKey
-from .field_dependencies import FieldDependency
-from .types import (
-    ValidationRule,
-    EntityData,
-    get_registered_type,
-    get_type_manager,
-    EntityStats,
-    RelationshipMap
-)
+from . import get_logger, ConfigurationError
+from .interfaces import IEntityStore, IEntityFactory
+from .component_utils import implements
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-class EntityStore:
-    """Entity store implementation with integrated validation and relationship management."""
+T = TypeVar('T')
 
-    def __init__(self, base_path: str, entity_type: str, config: ConfigManager) -> None:
-        """Initialize entity store with validation."""
-        logger.debug(f"Initializing EntityStore for {entity_type}")
-        self.config_manager = config
-        self.entity_type = entity_type
-        self.config = self.config_manager.config
-        self.entity_config = self.config_manager.get_entity_config(entity_type)
+@implements(IEntityStore)
+class SQLiteEntityStore(IEntityStore[T]):
+    """SQLite-based entity storage implementation."""
+    
+    def __init__(self, db_path: str, factory: IEntityFactory):
+        """Initialize store with database path and entity factory."""
+        self.db_path = db_path
+        self.factory = factory
+        self._lock = threading.RLock()
+        self._pool: Optional[List[sqlite3.Connection]] = None
+        self._pool_lock = threading.Lock()
+        self._available_conns: List[int] = []
+        self._journal_mode = 'WAL'
+        self._pool_size = 1
+        self._timeout_seconds = 30
+        self._init_db()
         
-        if not self.entity_config:
-            logger.error(f"No configuration found for entity type: {entity_type}")
-            raise ValueError(f"No configuration found for entity type: {entity_type}")
-        
-        logger.debug(f"Entity config for {entity_type}: {json.dumps(self.entity_config, indent=2)}")
-            
-        # Core components initialization
-        self.cache = get_entity_cache()
-        self.type_manager = get_type_manager()
-        self.type_manager.load_from_config(self.config)
-        self.entity_class = self.type_manager.get_type(entity_type) or EntityData
-        
-        # Component managers
-        self.mapper = EntityMapper(self.config_manager, entity_type)
-        self.serializer = EntitySerializer(
-            Path(base_path), 
-            entity_type,
-            self.config.get('global', {}).get('encoding', 'utf-8')
-        )
-        
-        # Initialize relationship management
-        self._init_relationship_management()
-        
-        # Load validation rules
-        self.validation_rules = self._load_validation_rules()
-        self.validator = ValidationEngine(self.config_manager)
-        logger.info(f"EntityStore initialized for {entity_type} with {len(self.validation_rules)} validation rules")
-
-    def _init_relationship_management(self) -> None:
-        """Initialize relationship management capabilities."""
-        self.relationships: DefaultDict[str, Dict[str, Set[str]]] = defaultdict(lambda: defaultdict(set))
-        self._relationship_configs = self._cache_relationship_configs()
-        
-    def _cache_relationship_configs(self) -> Dict[str, Any]:
-        """Cache relationship configurations for faster access."""
-        configs = {
-            'hierarchical': self.entity_config.get('relationships', {}).get('hierarchical', []),
-            'flat': self.entity_config.get('relationships', {}).get('flat', []),
-            'valid_types': set(),
-            'inverse_mappings': {},
-            'relationship_rules': defaultdict(dict)
-        }
-
-        # Process relationship configurations
-        for rel_config in chain(configs['hierarchical'], configs['flat']):
-            if 'type' in rel_config:
-                rel_type = rel_config['type']
-                configs['valid_types'].add(rel_type)
-                
-                if 'inverse_type' in rel_config:
-                    inverse_type = rel_config['inverse_type']
-                    configs['valid_types'].add(inverse_type)
-                    configs['inverse_mappings'][rel_type] = inverse_type
-                    configs['inverse_mappings'][inverse_type] = rel_type
-
-                if 'rules' in rel_config:
-                    configs['relationship_rules'][rel_type].update(rel_config['rules'])
-                    
-        return configs
-
-    def _load_validation_rules(self) -> List[ValidationRule]:
-        """Load validation rules from configuration."""
-        rules = []
-        validation_config = self.entity_config.get('validation', {})
-        error_messages = self.config.get('validation_messages', {})  # Fix property access
-        
-        for field, field_rules in validation_config.items():
-            try:
-                if isinstance(field_rules, dict):
-                    # Add error message handling
-                    if 'error' in field_rules:
-                        error_key = field_rules['error']
-                        if error_key in error_messages:
-                            field_rules['error_text'] = error_messages[error_key]
-                    rules.append(ValidationRule.from_yaml({
-                        'field': field,
-                        **field_rules
-                    }))
-                elif isinstance(field_rules, str) and field_rules.startswith('$ref:'):
-                    rule_config = self._get_validation_rule(field_rules[5:].trip())
-                    if rule_config:
-                        # Add error message handling for referenced rules
-                        if 'error' in rule_config:
-                            error_key = rule_config['error']
-                            if error_key in error_messages:
-                                rule_config['error_text'] = error_messages[error_key]
-                        rules.append(ValidationRule.from_yaml({
-                            'field': field,
-                            **rule_config
-                        }))
-            except Exception as e:
-                error_template = self.config.get('validation_messages', {}).get('rules', {}).get(
-                    'loading_error', "Error loading validation rule for field {field}: {error}"
-                )
-                logger.error(error_template.format(field=field, error=str(e)))
-                continue
-                
-        return rules
-                    
-    def _get_validation_rule(self, rule_path: str) -> Optional[Dict[str, Any]]: 
-        """Get validation rule configuration from reference path."""
-        parts = rule_path.split('.')
-        current = self.config.get('validation_types', {})  # Fix config access
-        
-        for part in parts:
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                error_template = self.config.get('validation_messages', {}).get('rules', {}).get(
-                    'invalid_reference', "Invalid validation rule reference: {path}"
-                )
-                logger.warning(error_template.format(path=rule_path))
-                return None
-                
-        return current if isinstance(current, dict) else None
-            
-    def extract_entity_data(self, source_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Extract entity data from source data according to mapping rules."""
-        if not source_data:
-            return None
-            
-        result = {}
-        field_mappings = self.entity_config.get('field_mappings', {})
-        
-        # Process direct mappings
-        for target_field, mapping in field_mappings.get('direct', {}).items():
-            if isinstance(mapping, str):
-                # Simple direct field mapping
-                if mapping in source_data:
-                    result[target_field] = source_data[mapping]
-            elif isinstance(mapping, dict):
-                source_field = mapping.get("field")
-                if source_field and source_field in source_data:
-                    value = source_data[source_field]
-                    # Apply transformations if defined
-                    if "transformation" in mapping:
-                        try:
-                            value = self._apply_transformation(value, mapping["transformation"])
-                        except TransformationError as e:
-                            logger.warning(f"Transformation error for {target_field}: {str(e)}")
-                            continue
-                    result[target_field] = value
-
-        # Process multi-source mappings
-        for target_field, mapping in field_mappings.get('multi_source', {}).items():
-            if not isinstance(mapping, dict):
-                continue
-                
-            sources = mapping.get('sources', [])
-            strategy = mapping.get('strategy', 'first_non_empty')
-            
-            if strategy == 'first_non_empty':
-                for source in sources:
-                    if source in source_data and source_data[source]:
-                        result[target_field] = source_data[source]
-                        break
-            elif strategy == 'concatenate':
-                values = [str(source_data.get(s, '')) for s in sources if s in source_data]
-                if values:
-                    result[target_field] = mapping.get('separator', ' ').join(values)
-
-        # Process object mappings
-        for target_field, mapping in field_mappings.get('object', {}).items():
-            if not isinstance(mapping, dict):
-                continue
-                
-            obj_data = {}
-            for obj_field, source_field in mapping.get('fields', {}).items():
-                if source_field in source_data:
-                    obj_data[obj_field] = source_data[source_field]
-                    
-            # Handle nested objects
-            for nested_name, nested_config in mapping.get('nested_objects', {}).items():
-                if isinstance(nested_config, dict):
-                    nested_data = {}
-                    for nested_field, nested_source in nested_config.get('fields', {}).items():
-                        if nested_source in source_data:
-                            nested_data[nested_field] = source_data[nested_source]
-                    if nested_data:
-                        obj_data[nested_name] = nested_data
-                        
-            if obj_data:
-                result[target_field] = obj_data
-
-        # Process reference mappings
-        for target_field, mapping in field_mappings.get('reference', {}).items():
-            if not isinstance(mapping, dict):
-                continue
-                
-            entity = mapping.get('entity')
-            key_field = mapping.get('key_field')
-            if entity and key_field and key_field in source_data:
-                result[f"{target_field}_ref"] = {
-                    "entity": entity,
-                    "key": source_data[key_field]
-                }
-                
-            # Handle composite keys
-            key_fields = mapping.get('key_fields', [])
-            key_prefix = mapping.get('key_prefix', '')
-            if entity and key_fields:
-                ref_key = {}
-                for field in key_fields:
-                    source_field = f"{key_prefix}_{field}" if key_prefix else field
-                    if source_field in source_data:
-                        ref_key[field] = source_data[source_field]
-                if ref_key:
-                    result[f"{target_field}_ref"] = {
-                        "entity": entity,
-                        "key": ref_key
-                    }
-
-        # Process template mappings
-        for target_field, mapping in field_mappings.get('template', {}).items():
-            if not isinstance(mapping, dict):
-                continue
-                
-            templates = mapping.get('templates', {})
-            for template_name, template_str in templates.items():
-                try:
-                    filled_template = template_str.format(**source_data)
-                    if filled_template:
-                        if target_field not in result:
-                            result[target_field] = {}
-                        result[target_field][template_name] = filled_template
-                except (KeyError, ValueError) as e:
-                    logger.warning(f"Template error for {target_field}.{template_name}: {str(e)}")
-                    continue
-
-        # Add validation after all mappings are processed
-        if result and self.validator:
-            validation_results = self.validator.validate_record(result)
-            if not all(r.valid for r in validation_results):
-                logger.warning(f"Validation failed for {self.entity_type}")
-                return None
-
-        return result if result else None
-            
-    def add_entity(self, data: Optional[Dict[str, Any]]) -> Optional[Union[str, Dict[str, str], CompositeKey]]:
-        """Add an entity to the store."""
-        if not data:
-            logger.debug(f"Skipping empty entity data for {self.entity_type}")
-            self.cache.add_skipped("invalid_data")
-            return None
-
-        logger.debug(f"Generating key for {self.entity_type} entity")
-        entity_key = self._generate_entity_key(data)
-        if not entity_key:
-            error_template = self.config.get('validation_messages', {}).get('entity', {}).get(
-                'missing_key_fields', "Missing required key fields for {entity_type}"
-            )
-            logger.warning(error_template.format(entity_type=self.entity_type))
-            self.cache.add_skipped("missing_key_fields")
-            return None
-            
-        # Convert to hashable format if needed
-        cache_key = self._make_hashable_key(entity_key)
-        is_update = cache_key in self.cache.cache
-        
-        if is_update:
-            logger.debug(f"Updating existing {self.entity_type} entity with key: {cache_key}")
-        else:
-            logger.debug(f"Adding new {self.entity_type} entity with key: {cache_key}")
-        
-        # Store the original key format for external references
-        original_key = entity_key if isinstance(entity_key, dict) else cache_key
-        self.cache.add_entity(cache_key, data, is_update)
-        
-        # Process relationships if configured
-        if data and cache_key:
-            logger.debug(f"Processing relationships for {self.entity_type} entity: {cache_key}")
-            self.process_relationships(data, {"key": cache_key})
-                
-        return original_key
-
-    def _make_hashable_key(self, key: Union[str, Dict[str, str], CompositeKey]) -> Union[str, CompositeKey]:
-        """Convert a key into a hashable format.
+    def configure_connection_pool(self, pool_size: int = 1, timeout_seconds: int = 30, journal_mode: str = 'WAL') -> None:
+        """Configure the connection pool settings.
         
         Args:
-            key: The key to convert. Can be a string, dictionary, or CompositeKey
-            
-        Returns:
-            A hashable version of the key (either string or CompositeKey)
-            
-        Raises:
-            ValueError: If the key is neither a string, dictionary, nor CompositeKey
+            pool_size: Number of connections to maintain
+            timeout_seconds: Connection timeout in seconds
+            journal_mode: SQLite journal mode (WAL, DELETE, etc.)
         """
-        if isinstance(key, (str, CompositeKey)):
-            return key
-        elif isinstance(key, dict):
-            # Convert all dictionary values to strings to ensure consistent hashing
-            key_dict = {str(k): str(v) for k, v in key.items()}
-            return CompositeKey(key_dict)
+        with self._lock:
+            # Close existing pool if it exists
+            if self._pool:
+                for conn in self._pool:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                        
+            self._pool_size = max(1, pool_size)
+            self._timeout_seconds = max(1, timeout_seconds)
+            self._journal_mode = journal_mode.upper()
+            
+            # Initialize new connection pool
+            self._pool = []
+            self._available_conns = list(range(self._pool_size))
+            
+            for _ in range(self._pool_size):
+                conn = self._create_connection()
+                self._pool.append(conn)
+    
+    def _create_connection(self) -> sqlite3.Connection:
+        """Create a new database connection with configured settings."""
+        conn = sqlite3.connect(self.db_path, timeout=self._timeout_seconds)
+        conn.row_factory = sqlite3.Row
+        
+        # Configure journal mode
+        if self._journal_mode:
+            conn.execute(f"PRAGMA journal_mode={self._journal_mode}")
+            
+        # Other pragmas for better performance
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-2000")  # 2MB cache
+        
+        return conn
+    
+    @contextmanager
+    def _get_connection(self):
+        """Get a connection from the pool."""
+        if not self._pool:
+            # No pool configured, use basic connection
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                yield conn
+            finally:
+                conn.close()
+            return
+            
+        # Get connection from pool
+        conn_id = None
+        try:
+            with self._pool_lock:
+                while not self._available_conns:
+                    self._pool_lock.release()
+                    time.sleep(0.1)  # Wait for available connection
+                    self._pool_lock.acquire()
+                conn_id = self._available_conns.pop()
+                conn = self._pool[conn_id]
+                
+            yield conn
+            
+        finally:
+            if conn_id is not None:
+                with self._pool_lock:
+                    self._available_conns.append(conn_id)
+    
+    def close(self) -> None:
+        """Close all connections in the pool."""
+        if self._pool:
+            with self._lock:
+                for conn in self._pool:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                self._pool = None
+                self._available_conns = []
+
+    def _init_db(self) -> None:
+        """Initialize database schema."""
+        with self._get_connection() as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS entities (
+                    id TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_entity_type 
+                ON entities(entity_type)
+            """)
+            conn.commit()
+            
+    def save(self, entity_type: str, entity: T) -> str:
+        """Save entity and return its ID."""
+        # Convert entity to dictionary
+        if hasattr(entity, '__dict__'):
+            data = entity.__dict__
+        elif hasattr(entity, '_asdict'):
+            data = entity._asdict()
         else:
-            raise ValueError(f"Invalid key type: {type(key)}")
-
-    def _generate_entity_key(self, entity_data: Dict[str, Any]) -> Optional[str]:
-        """Generate entity key using mapper."""
-        return self.mapper.build_key(entity_data)
-
-    def process_relationships(self, entity_data: Dict[str, Any], context: Optional[Dict[str, Any]] = None) -> None:
-        """Process entity relationships based on configuration."""
-        if not entity_data or not context:
-            logger.debug(f"Skipping relationship processing for {self.entity_type} - missing data or context")
-            return
+            data = dict(entity)
             
-        entity_key = context.get('key')
-        if not entity_key:
-            logger.warning(f"Invalid entity key in context for {self.entity_type}")
-            return
-
-        logger.debug(f"Processing relationships for {self.entity_type} with key: {entity_key}")
-
-        # Ensure key is hashable
-        if isinstance(entity_key, dict):
-            entity_key = self._make_hashable_key(entity_key)
-
-        self._process_flat_relationships(entity_data, entity_key)
-        self._process_hierarchical_relationships(entity_data, entity_key)
+        # Generate ID if not present
+        entity_id = data.get('id') or self._generate_id(entity_type)
+        data['id'] = entity_id
         
-        # Log relationship stats
-        rel_count = sum(len(rels) for rels in self.relationships[entity_key].values())
-        logger.debug(f"Processed {rel_count} relationships for {self.entity_type} entity: {entity_key}")
-
-    def _process_flat_relationships(self, entity_data: Dict[str, Any], entity_key: Union[str, CompositeKey]) -> None:
-        """Process flat relationships."""
-        for rel_config in self._relationship_configs['flat']:
-            from_field = rel_config.get('from_field')
-            to_field = rel_config.get('to_field')
-            rel_type = rel_config.get('type')
-            inverse_type = rel_config.get('inverse_type')
+        current_time = datetime.utcnow().isoformat()
+        
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO entities 
+                (id, entity_type, data, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                entity_id,
+                entity_type,
+                json.dumps(data),
+                current_time,
+                current_time
+            ))
+            conn.commit()
             
-            if not all([from_field, to_field, rel_type]):
-                continue
-                
-            from_value = entity_data.get(from_field)
-            to_value = entity_data.get(to_field)
+        return entity_id
+        
+    def get(self, entity_type: str, entity_id: str) -> Optional[T]:
+        """Get entity by ID."""
+        with self._get_connection() as conn:
+            row = conn.execute("""
+                SELECT data FROM entities 
+                WHERE entity_type = ? AND id = ?
+            """, (entity_type, entity_id)).fetchone()
             
-            if from_value and to_value:
-                # Handle composite keys in relationship values
-                if isinstance(from_value, dict):
-                    from_value = self._make_hashable_key(from_value)
-                if isinstance(to_value, dict):
-                    to_value = self._make_hashable_key(to_value)
+        if not row:
+            return None
+            
+        data = json.loads(row['data'])
+        return self.factory.create_entity(entity_type, data)
+        
+    def delete(self, entity_type: str, entity_id: str) -> bool:
+        """Delete entity by ID."""
+        with self._get_connection() as conn:
+            cursor = conn.execute("""
+                DELETE FROM entities 
+                WHERE entity_type = ? AND id = ?
+            """, (entity_type, entity_id))
+            conn.commit()
+            
+        return cursor.rowcount > 0
+        
+    def list(self, entity_type: str) -> Iterator[T]:
+        """List all entities of a type."""
+        with self._get_connection() as conn:
+            for row in conn.execute("""
+                SELECT data FROM entities 
+                WHERE entity_type = ?
+                ORDER BY created_at
+            """, (entity_type,)):
+                data = json.loads(row['data'])
+                entity = self.factory.create_entity(entity_type, data)
+                if entity:
+                    yield entity
                     
-                if isinstance(from_value, (list, set)):
-                    for value in from_value:
-                        self.add_relationship(
-                            self._make_hashable_key(value) if isinstance(value, dict) else str(value),
-                            rel_type,
-                            self._make_hashable_key(to_value) if isinstance(to_value, dict) else str(to_value),
-                            inverse_type
-                        )
-                else:
-                    self.add_relationship(
-                        self._make_hashable_key(from_value) if isinstance(from_value, dict) else str(from_value),
-                        rel_type,
-                        self._make_hashable_key(to_value) if isinstance(to_value, dict) else str(to_value),
-                        inverse_type
-                    )
-
-    def _process_hierarchical_relationships(self, entity_data: Dict[str, Any], entity_key: str) -> None:
-        """Process hierarchical relationships."""
-        entity_keys = self._extract_entity_keys(entity_data)
-        if not entity_keys:
-            return
-
-        for rel_config in self._relationship_configs['hierarchical']:
-            from_level = rel_config.get('from_level')
-            to_level = rel_config.get('to_level')
-            rel_type = rel_config.get('type')
-            inverse_type = rel_config.get('inverse_type')
+    def count(self, entity_type: str) -> int:
+        """Count entities of a type."""
+        with self._get_connection() as conn:
+            result = conn.execute("""
+                SELECT COUNT(*) as count FROM entities 
+                WHERE entity_type = ?
+            """, (entity_type,)).fetchone()
             
-            if not all([from_level, to_level, rel_type]):
-                continue
-                
-            if from_level in entity_keys and to_level in entity_keys:
-                from_key = entity_keys[from_level]
-                to_key = entity_keys[to_level]
-                
-                if self.would_create_cycle(to_key, from_key):
-                    logger.warning(f"Skipping cyclic relationship: {from_key} -{rel_type}-> {to_key}")
-                    continue
-                
-                self.add_relationship(from_key, rel_type, to_key, inverse_type)
-
-    def _extract_entity_keys(self, entity_data: Dict[str, Any]) -> Dict[str, Union[str, CompositeKey]]:
-        """Extract entity keys from data for hierarchical relationships."""
-        keys = {}
-        for level, key_field in self.entity_config.get('key_fields', {}).items():
-            if isinstance(key_field, list):
-                # Handle composite keys
-                key_parts = {}
-                for field in key_field:
-                    if field in entity_data:
-                        key_parts[field] = str(entity_data[field])
-                if key_parts:
-                    keys[level] = self._make_hashable_key(key_parts)
-            elif key_field in entity_data:
-                keys[level] = str(entity_data[key_field])
-        return keys
-
-    def add_relationship(self, from_key: str, rel_type: str, to_key: str, inverse_type: Optional[str] = None) -> None:
-        """Add a relationship between entities."""
-        if not all([from_key, rel_type, to_key]):
-            logger.warning("Invalid relationship parameters")
-            return
-
-        if rel_type not in self._relationship_configs['valid_types']:
-            logger.warning(f"Invalid relationship type '{rel_type}' for {self.entity_type}")
-            return
-
-        # Apply relationship rules
-        rules = self._relationship_configs['relationship_rules'].get(rel_type, {})
-        if rules:
-            if rules.get('exclusive', False) and self.relationships[from_key][rel_type]:
-                logger.warning(f"Exclusive relationship violation for {rel_type}")
-                return
-                
-            if rules.get('max_cardinality'):
-                if len(self.relationships[from_key][rel_type]) >= rules['max_cardinality']:
-                    logger.warning(f"Maximum cardinality reached for {rel_type}")
-                    return
-
-        # Add relationships
-        self.relationships[from_key][rel_type].add(to_key)
+        return result['count'] if result else 0
         
-        effective_inverse = inverse_type or self._relationship_configs['inverse_mappings'].get(rel_type)
-        if effective_inverse:
-            self.relationships[to_key][effective_inverse].add(from_key)
+    def _generate_id(self, entity_type: str) -> str:
+        """Generate unique entity ID."""
+        import uuid
+        return f"{entity_type}-{uuid.uuid4()}"
 
-    def get_related_entities(self, entity_key: str, rel_type: str) -> Set[str]:
-        """Get related entities by type."""
-        return self.relationships[entity_key][rel_type].copy()
-
-    def get_all_relationships(self, entity_key: str) -> Dict[str, Set[str]]:
-        """Get all relationships for an entity."""
-        return {k: v.copy() for k, v in self.relationships[entity_key].items()}
-
-    def would_create_cycle(self, child_key: str, parent_key: str) -> bool:
-        """Check for relationship cycles."""
-        if child_key == parent_key:
-            return True
-
-        hierarchical_types = {
-            config['type'] for config in self._relationship_configs['hierarchical']
-            if 'type' in config
-        }
-
-        ancestors = set()
-        to_check = {parent_key}
+@implements(IEntityStore)
+class FileSystemEntityStore(IEntityStore[T]):
+    """File system-based entity storage implementation."""
+    
+    def __init__(self, base_path: str, factory: IEntityFactory, max_files_per_dir: int = 1000, compression: bool = True):
+        """Initialize store with base path and entity factory.
         
-        while to_check:
-            current = to_check.pop()
-            if current == child_key:
-                return True
+        Args:
+            base_path: Base directory path for entity storage
+            factory: Factory for creating entity instances
+            max_files_per_dir: Maximum number of files per subdirectory
+            compression: Whether to use gzip compression
+        """
+        self.base_path = pathlib.Path(base_path)
+        self.factory = factory
+        self.max_files_per_dir = max_files_per_dir
+        self.compression = compression
+        self._lock = threading.RLock()
+        self._type_counts: Dict[str, int] = {}
+        self._ensure_base_dir()
+        
+        # Log the base directory path to verify it's correct
+        logger.info(f"Entity store initialized with base path: {os.path.abspath(self.base_path)}")
+    
+    def _ensure_base_dir(self) -> None:
+        """Ensure base directory exists."""
+        try:
+            os.makedirs(self.base_path, exist_ok=True)
+            # Verify directory exists after creation
+            if not os.path.exists(self.base_path):
+                logger.error(f"Failed to create base directory: {self.base_path}")
+            else:
+                # Test write permissions
+                test_file = self.base_path / "write_test.tmp"
+                try:
+                    with open(test_file, 'w') as f:
+                        f.write("test")
+                    os.remove(test_file)
+                except Exception as e:
+                    logger.error(f"Base directory exists but is not writable: {self.base_path}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Error creating base directory: {self.base_path}: {str(e)}")
+    
+    def _get_type_dir(self, entity_type: str, create: bool = True) -> pathlib.Path:
+        """Get directory path for entity type."""
+        type_dir = self.base_path / entity_type
+        if create:
+            try:
+                os.makedirs(type_dir, exist_ok=True)
+                # Verify directory exists after creation
+                if not os.path.exists(type_dir):
+                    logger.error(f"Failed to create entity type directory: {type_dir}")
+            except Exception as e:
+                logger.error(f"Error creating entity type directory: {type_dir}: {str(e)}")
+        return type_dir
+    
+    def _get_subdir_path(self, entity_type: str, entity_id: str) -> pathlib.Path:
+        """Get subdirectory path for entity, creating parent dirs if needed."""
+        # Use first few chars of ID for subdir to avoid too many files in one dir
+        subdir_name = entity_id[:3] if len(entity_id) > 3 else entity_id
+        subdir_path = self._get_type_dir(entity_type) / subdir_name
+        try:
+            os.makedirs(subdir_path, exist_ok=True)
+            # Verify directory exists after creation
+            if not os.path.exists(subdir_path):
+                logger.error(f"Failed to create entity subdirectory: {subdir_path}")
+        except Exception as e:
+            logger.error(f"Error creating entity subdirectory: {subdir_path}: {str(e)}")
+        return subdir_path
+    
+    def _get_entity_path(self, entity_type: str, entity_id: str) -> pathlib.Path:
+        """Get full path for entity file."""
+        subdir = self._get_subdir_path(entity_type, entity_id)
+        filename = f"{entity_id}.json{'.gz' if self.compression else ''}"
+        return subdir / filename
+    
+    def _generate_id(self, entity_type: str) -> str:
+        """Generate unique entity ID."""
+        import uuid
+        return f"{entity_type}-{uuid.uuid4()}"
+    
+    def save(self, entity_type: str, entity: T) -> str:
+        """Save entity and return its ID."""
+        with self._lock:
+            # Convert entity to dictionary
+            if hasattr(entity, '__dict__'):
+                data = entity.__dict__
+            elif hasattr(entity, '_asdict'):
+                data = entity._asdict()
+            else:
+                data = dict(entity)
                 
-            for rel_type in hierarchical_types:
-                parents = self.get_related_entities(current, rel_type)
-                new_ancestors = parents - ancestors
-                ancestors.update(new_ancestors)
-                to_check.update(new_ancestors)
+            # Generate ID if not present
+            entity_id = data.get('id') or self._generate_id(entity_type)
+            data['id'] = entity_id
+            
+            # Add metadata
+            current_time = datetime.utcnow().isoformat()
+            data['_metadata'] = {
+                'created_at': current_time,
+                'updated_at': current_time,
+                'entity_type': entity_type
+            }
+            
+            # Get file path and ensure parent directory exists
+            file_path = self._get_entity_path(entity_type, entity_id)
+            
+            # Write entity data
+            try:
+                # Prepare JSON content before opening file
+                json_content = json.dumps(data, indent=2)
                 
-        return False
-
-    def save(self) -> None:
-        """Save entities and relationships."""
-        logger.info(f"Saving {self.entity_type} store")
-        logger.debug(f"Entity count: {len(self.cache.cache)}")
-        logger.debug(f"Relationship count: {sum(len(v) for v in self.relationships.values())}")
+                # Ensure parent directory exists again right before writing
+                os.makedirs(file_path.parent, exist_ok=True)
+                
+                if self.compression:
+                    with gzip.open(file_path, 'wt', encoding='utf-8') as f:
+                        f.write(json_content)
+                else:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(json_content)
+                        
+                # Update type counts cache
+                self._type_counts[entity_type] = -1  # Invalidate count
+                
+                # Log successful entity save
+                logger.debug(f"Successfully saved entity {entity_type}/{entity_id} to {file_path}")
+                
+                return entity_id
+                
+            except Exception as e:
+                logger.error(f"Error saving entity {entity_id} to {file_path}: {str(e)}")
+                raise
+    
+    def get(self, entity_type: str, entity_id: str) -> Optional[T]:
+        """Get entity by ID."""
+        file_path = self._get_entity_path(entity_type, entity_id)
         
         try:
-            self.serializer.save(
-                self.cache.cache,
-                dict(self.relationships),  # Convert defaultdict to regular dict
-                self.cache.get_stats()
-            )
-            logger.info(f"Successfully saved {self.entity_type} store")
-        except Exception as e:
-            logger.error(f"Error saving {self.entity_type} store: {str(e)}", exc_info=True)
-            raise
-
-class FieldDependencyManager:
-    def __init__(self):
-        self.dependencies = {}
-
-    def add_dependency(self, field_name, target_field, dependency_type, metadata=None):
-        """Add dependency with cycle detection."""
-        # Check if adding this dependency would create a cycle
-        if metadata and metadata.get('bidirectional') and self._has_path(target_field, field_name):
-            # For bidirectional dependencies, mark them specially
-            if metadata is None:
-                metadata = {}
-            metadata['circular'] = True
-        
-        # Add to dependency graph
-        if field_name not in self.dependencies:
-            self.dependencies[field_name] = []
-        self.dependencies[field_name].append({
-            'target': target_field,
-            'type': dependency_type,
-            'metadata': metadata
-        })
-
-    def _has_path(self, start, end, visited=None):
-        """Check if there's a path from start to end in dependency graph."""
-        if visited is None:
-            visited = set()
-        
-        if start == end:
-            return True
-        
-        if start in visited:
-            return False
-        
-        visited.add(start)
-        
-        for dep in self.dependencies.get(start, []):
-            if self._has_path(dep['target'], end, visited):
-                return True
+            if not file_path.exists():
+                return None
                 
-        return False
+            if self.compression:
+                with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                    data = json.load(f)
+            else:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    
+            return self.factory.create_entity(entity_type, data)
+            
+        except Exception as e:
+            logger.error(f"Error loading entity {entity_id}: {str(e)}")
+            return None
+    
+    def delete(self, entity_type: str, entity_id: str) -> bool:
+        """Delete entity by ID."""
+        with self._lock:
+            file_path = self._get_entity_path(entity_type, entity_id)
+            
+            try:
+                if file_path.exists():
+                    os.remove(file_path)
+                    
+                    # Try to remove empty parent directories
+                    parent = file_path.parent
+                    while parent != self.base_path:
+                        try:
+                            parent.rmdir()  # Only removes if empty
+                            parent = parent.parent
+                        except OSError:
+                            break
+                            
+                    # Invalidate type count
+                    self._type_counts[entity_type] = -1
+                    return True
+                    
+                return False
+                
+            except Exception as e:
+                logger.error(f"Error deleting entity {entity_id}: {str(e)}")
+                return False
+    
+    def list(self, entity_type: str) -> Iterator[T]:
+        """List all entities of a type."""
+        type_dir = self._get_type_dir(entity_type, create=False)
+        
+        if not type_dir.exists():
+            return
+            
+        # Walk through all subdirectories
+        for root, _, files in os.walk(type_dir):
+            for filename in files:
+                if not filename.endswith('.json' + ('.gz' if self.compression else '')):
+                    continue
+                    
+                file_path = pathlib.Path(root) / filename
+                
+                try:
+                    if self.compression:
+                        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                            data = json.load(f)
+                    else:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                            
+                    entity = self.factory.create_entity(entity_type, data)
+                    if entity:
+                        yield entity
+                        
+                except Exception as e:
+                    logger.error(f"Error loading entity from {file_path}: {str(e)}")
+                    continue
+    
+    def count(self, entity_type: str) -> int:
+        """Count entities of a type."""
+        # Check cache first
+        if entity_type in self._type_counts and self._type_counts[entity_type] >= 0:
+            return self._type_counts[entity_type]
+            
+        type_dir = self._get_type_dir(entity_type, create=False)
+        
+        if not type_dir.exists():
+            return 0
+            
+        # Count all JSON/GZ files
+        count = 0
+        suffix = '.json' + ('.gz' if self.compression else '')
+        
+        for root, _, files in os.walk(type_dir):
+            count += sum(1 for f in files if f.endswith(suffix))
+            
+        # Cache the result
+        self._type_counts[entity_type] = count
+        return count
+    
+    def _cleanup_empty_dirs(self) -> None:
+        """Remove empty subdirectories."""
+        with self._lock:
+            for root, dirs, files in os.walk(self.base_path, topdown=False):
+                for dirname in dirs:
+                    try:
+                        dir_path = pathlib.Path(root) / dirname
+                        dir_path.rmdir()  # Only removes if empty
+                    except OSError:
+                        continue
 
-    def get_dependencies(self, field_name: str):
-        return self.dependencies.get(field_name, set())
+class EntityStoreBuilder:
+    """Builder for creating configured EntityStore instances."""
+    
+    def __init__(self):
+        """Initialize builder."""
+        self.storage_type: str = 'sqlite'
+        self.path: str = ':memory:'
+        self.factory: Optional[IEntityFactory] = None
+        self.max_files_per_dir: int = 1000
+        self.compression: bool = True
+        self.pool_size: int = 1
+        self.timeout_seconds: int = 30
+        self.journal_mode: str = 'WAL'
+        
+    def with_sqlite_storage(self, db_path: str) -> 'EntityStoreBuilder':
+        """Use SQLite storage."""
+        self.storage_type = 'sqlite'
+        self.path = db_path
+        return self
+        
+    def with_filesystem_storage(self, base_path: str) -> 'EntityStoreBuilder':
+        """Use file system storage."""
+        self.storage_type = 'filesystem'
+        self.path = base_path
+        return self
+        
+    def with_factory(self, factory: IEntityFactory) -> 'EntityStoreBuilder':
+        """Set entity factory."""
+        self.factory = factory
+        return self
+        
+    def with_storage_options(self, **options) -> 'EntityStoreBuilder':
+        """Set additional storage options."""
+        if 'max_files_per_dir' in options:
+            self.max_files_per_dir = options['max_files_per_dir']
+        if 'compression' in options:
+            self.compression = options['compression']
+        if 'pool_size' in options:
+            self.pool_size = options['pool_size']
+        if 'timeout_seconds' in options:
+            self.timeout_seconds = options['timeout_seconds']
+        if 'journal_mode' in options:
+            self.journal_mode = options['journal_mode']
+        return self
+        
+    def from_config(self, config: Dict[str, Any]) -> 'EntityStoreBuilder':
+        """Configure builder from configuration dictionary."""
+        if not isinstance(config, dict):
+            raise ValueError("Configuration must be a dictionary")
+            
+        storage_config = config.get('config', {})
+        
+        # Get storage type
+        storage_type = storage_config.get('storage_type', 'sqlite')
+        if storage_type not in ('sqlite', 'filesystem'):
+            raise ValueError(f"Invalid storage type: {storage_type}")
+            
+        # Get path
+        path = storage_config.get('path')
+        if not path:
+            raise ValueError("Storage path is required")
+            
+        # Configure storage type
+        if storage_type == 'sqlite':
+            self.with_sqlite_storage(path)
+        else:
+            self.with_filesystem_storage(path)
+            
+        # Configure storage options
+        self.with_storage_options(
+            max_files_per_dir=storage_config.get('max_files_per_dir', 1000),
+            compression=storage_config.get('compression', True),
+            pool_size=storage_config.get('pool_size', 1),
+            timeout_seconds=storage_config.get('timeout_seconds', 30),
+            journal_mode=storage_config.get('journal_mode', 'WAL')
+        )
+        
+        return self
+        
+    def build(self) -> IEntityStore:
+        """Create EntityStore instance."""
+        if not self.factory:
+            raise ValueError("Entity factory is required")
+            
+        if self.storage_type == 'sqlite':
+            store = SQLiteEntityStore(self.path, self.factory)
+            # Configure SQLite connection pool and journal mode if supported
+            if hasattr(store, 'configure_connection_pool'):
+                store.configure_connection_pool(
+                    pool_size=self.pool_size,
+                    timeout_seconds=self.timeout_seconds,
+                    journal_mode=self.journal_mode
+                )
+            return store
+        elif self.storage_type == 'filesystem':
+            return FileSystemEntityStore(
+                self.path,
+                self.factory,
+                max_files_per_dir=self.max_files_per_dir,
+                compression=self.compression
+            )
+        else:
+            raise ValueError(f"Unknown storage type: {self.storage_type}")
 
-    def get_dependent_fields(self, target_field: str):
-        dependents = set()
-        for field, deps in self.dependencies.items():
-            if any(target_field in dep.dependencies for dep in deps):
-                dependents.add(field)
-        return dependents
+# Default store implementation
+EntityStore = SQLiteEntityStore  # Use SQLite as the default implementation
+
+# Factory method to create an instance from the configuration
+def create_entity_store_from_config(config: Dict[str, Any], factory: Optional[IEntityFactory] = None) -> IEntityStore:
+    """Create an EntityStore instance from configuration.
+    
+    Args:
+        config: Configuration dictionary
+        factory: Factory for creating entity instances (required)
+        
+    Returns:
+        Configured entity store instance
+        
+    Raises:
+        ValueError: If factory is not provided
+    """
+    if factory is None:
+        raise ValueError("Entity factory must be provided")
+        
+    # Extract config from system.entity_store section if needed
+    if isinstance(config, dict) and "config" in config:
+        config = config["config"]
+    
+    # Get storage type and other configuration
+    storage_type = config.get("storage_type", "filesystem")
+    
+    builder = EntityStoreBuilder().with_factory(factory)
+    
+    if storage_type == "filesystem":
+        # Configure and return FileSystemEntityStore
+        path = config.get("path", "output/entities")
+        max_files = config.get("max_files_per_dir", 1000)
+        compression = config.get("compression", True)
+        
+        return builder.with_filesystem_storage(path).with_storage_options(
+            max_files_per_dir=max_files,
+            compression=compression
+        ).build()
+        
+    elif storage_type == "sqlite":
+        # Configure and return SQLiteEntityStore
+        db_path = config.get("path") or config.get("db_file", "output/entities.db")
+        pool_size = config.get("pool_size", 1)
+        timeout = config.get("timeout_seconds", 30)
+        journal_mode = config.get("journal_mode", "WAL")
+        
+        return builder.with_sqlite_storage(db_path).with_storage_options(
+            pool_size=pool_size,
+            timeout_seconds=timeout,
+            journal_mode=journal_mode
+        ).build()
+        
+    else:
+        raise ConfigurationError(f"Unknown entity storage type: {storage_type}")

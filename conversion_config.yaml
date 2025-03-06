@@ -6,6 +6,35 @@
 # It follows a standardized structure for maintainability and clarity.
 #==============================================================================
 
+# Component configurations - these need to be at the top level
+entity_factory:
+  class: "src.usaspending.entity_factory.EntityFactory"
+  config:
+    type_adapters:
+      string: "src.usaspending.schema_adapters.StringAdapter"
+      integer: "src.usaspending.schema_adapters.IntegerAdapter"
+      decimal: "src.usaspending.schema_adapters.DecimalAdapter"
+      money: "src.usaspending.schema_adapters.MoneyAdapter"
+      date: "src.usaspending.schema_adapters.DateAdapter"
+      boolean: "src.usaspending.boolean_adapters.BooleanAdapter"
+      enum: "src.usaspending.enum_adapters.EnumAdapter"
+
+entity_store:
+  class: "src.usaspending.entity_store.FileSystemEntityStore"
+  config:
+    storage_type: "filesystem"
+    path: "output/entities"
+    max_files_per_dir: 1000
+    compression: true
+
+validation_service:
+  class: "src.usaspending.validation_service.ValidationService"
+  config:
+    strict_mode: false
+    cache_size: 1000
+    parallel: true
+    max_errors: 100
+
 #==============================================================================
 # 1. SYSTEM CONFIGURATION
 #==============================================================================
