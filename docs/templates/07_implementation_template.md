@@ -1,174 +1,458 @@
 ---
 theme: light
-title: USASpending Code Review Update Instructions
-description: Instructions for documenting code review updates using PDCA cycle
-version: 2.1.0
+title: Implementation Report Template
+description: Template for documenting implementation details with configuration-first approach
+version: 1.0.0
 ---
 
-# Update Implementation Instructions
+# Implementation Report
 
-## Implementation Workflow
+## Implementation Overview
 
-The complete workflow for addressing issues identified in code reviews follows this sequence:
+**Implementation Date**: [YYYY-MM-DD]  
+**Implementer**: [Name/Team]  
+**Change Type**: [Configuration/Code/Both]  
+**Review Reference**: [Link to review document]  
+**Update Reference**: [Link to update document]
+
+### Change Summary
+
+| Category | Changes | Status |
+|----------|---------|--------|
+| Configuration | [Count] | Complete/In Progress |
+| Code | [Count] | Complete/In Progress |
+| Tests | [Count] | Complete/In Progress |
+| Documentation | [Count] | Complete/In Progress |
+
+## Configuration Implementation
+
+### 1. Schema Changes
 
 ```mermaid
-flowchart TD
-    A[Issue Identification] --> B[Implementation Planning]
-    B --> C[Fix Implementation]
-    C --> D[Testing]
-    D --> E[Verification]
-    E -->|Pass| F[Documentation]
-    E -->|Fail| C
+graph TD
+    A[Original Schema] --> B[Migration Step 1]
+    B --> C[Migration Step 2]
+    C --> D[Final Schema]
     
     style A fill:#ffcccc
     style D fill:#ccffcc
-    style E fill:#ccccff
-    style F fill:#ffccff
 ```
 
-### Required Sequence
+| Schema | Migration Steps | Validation Status | Issues |
+|--------|----------------|-------------------|---------|
+| [Name] | [Steps] | ✅/⚠️/❌ | [Count] |
 
-1. **Issue Identification**: From code review report
-2. **Implementation Planning**: Create detailed fix plans
-3. **Fix Implementation**: Write the actual code changes
-4. **Testing**: Execute test cases and validation
-5. **Verification**: Confirm all test cases pass
-6. **Documentation**: ONLY document verified fixes
+### 2. Business Rule Implementation
 
-> [!WARNING]
-> Never document fixes in the final report until they have been fully implemented and verified through testing. The report should reflect actual completed work, not planned changes.
+| Rule ID | Configuration | Tests | Status |
+|---------|--------------|-------|--------|
+| [RUL-01] | [Location] | [Test IDs] | ✅/⚠️/❌ |
 
-### Baseline Framework File
+### 3. Entity Configuration
 
-Before implementing fixes, create a baseline framework file that includes:
+| Entity | Changes | Migration | Status |
+|--------|---------|-----------|--------|
+| [Name] | [List] | Required/None | ✅/⚠️/❌ |
 
-1. **Issue Tracking Table**
-   ```
-   | Issue ID | Priority | Description | Implementation Plan | Test Cases | Status |
-   |----------|----------|-------------|---------------------|------------|--------|
-   | CRIT-01  | P1       | [From review]| [Approach]         | [Tests]    | Not Started |
-   ```
+## Code Implementation
 
-2. **Implementation Schedule**
-   ```
-   | Issue ID | Start Date | Target Completion | Dependencies | Owner |
-   |----------|------------|-------------------|--------------|-------|
-   | CRIT-01  | YYYY-MM-DD | YYYY-MM-DD        | None         | [Name]|
-   ```
+### 1. Component Changes
 
-3. **Test Plan**
-   ```
-   | Issue ID | Test Case ID | Description | Expected Result | Actual Result | Status |
-   |----------|--------------|-------------|----------------|--------------|--------|
-   | CRIT-01  | TC-01        | [Test case] | [Expected]     | [Actual]     | Pass/Fail |
-   ```
+| Component | Files Changed | Test Coverage | Status |
+|-----------|--------------|---------------|---------|
+| [Name] | [Count] | [X%] | ✅/⚠️/❌ |
 
-4. **Verification Checklist**
-   ```
-   | Issue ID | Code Review | Unit Tests | Integration Tests | Performance Tests | Security Tests | Status |
-   |----------|-------------|------------|------------------|-------------------|---------------|--------|
-   | CRIT-01  | ✅/❌       | ✅/❌      | ✅/❌            | ✅/❌             | ✅/❌         | Complete/Incomplete |
-   ```
+### 2. Dependency Updates
 
-## PDCA Cycle Implementation
+| Package | Old Version | New Version | Impact |
+|---------|------------|-------------|---------|
+| [Name] | [X.Y.Z] | [X.Y.Z] | None/Breaking |
 
-### Plan
-1. Review Identification
-   - Use most recent review by default
-   - Verify review contents
-   - Enable historical review override
-   - Ensure clear scope
+### 3. Interface Changes
 
-2. Review original findings
-   - Prioritize issues
-   - Define success criteria
-   - Identify dependencies
-   - Plan verification methods
+```typescript
+// Old Interface
+interface IOldComponent {
+    // ...old methods...
+}
 
-3. Design Solutions
-   - Document proposed changes
-   - Create test plans BEFORE implementation
-   - Define verification criteria
-   - Consider side effects
-   - Plan rollback options
+// New Interface
+interface INewComponent {
+    // ...new methods...
+}
+```
 
-### Do
-1. Implementation Tracking
-   - Work from baseline framework
-   - Document actual changes
-   - Record deviations from plan
-   - Note unexpected issues
-   - Track time/effort
-   - Keep changes isolated in feature branches
+## Migration Process
 
-2. Testing Process
-   - Execute test cases defined in Plan phase
-   - Document test results in framework file
-   - Record metrics and measurements
-   - Note observations
-   - Validate against success criteria
-   - Collect evidence of successful testing
+### 1. Configuration Migration
 
-### Check
-1. Validation Process
-   - Compare against success criteria
-   - Verify ALL test results pass
-   - Measure performance impact
-   - Check for regressions
-   - Ensure compliance requirements are met
-   - Verify code meets all standards
+```yaml
+# Migration Steps
+steps:
+  - step: "Update schema"
+    status: "Complete"
+    validation: "Passed"
+    rollback: "restore_schema_v1.yaml"
+  
+  - step: "Transform data"
+    status: "Complete"
+    validation: "Passed"
+    rollback: "restore_data_v1.py"
+```
 
-2. Impact Analysis
-   - Document actual vs expected results
-   - Analyze any deviations
-   - Assess side effects
-   - Evaluate effectiveness
-   - Confirm all requirements are satisfied
+### 2. Code Migration
 
-### Act
-1. Documentation
-   - Record final implementation ONLY after verification
-   - Document ACTUAL implemented solutions (not planned)
-   - Include real test results and measurements
-   - Update relevant docs
-   - Note lessons learned
-   - Plan follow-up actions
+| Phase | Changes | Rollback | Status |
+|-------|---------|----------|--------|
+| [Phase] | [List] | [Method] | ✅/⚠️/❌ |
 
-2. Process Improvement
-   - Identify process gaps
-   - Document lessons learned
-   - Update templates if needed
-   - Share knowledge with team
+### 3. Data Migration
 
-## Update Documentation Requirements
+| Data Type | Records | Success Rate | Issues |
+|-----------|---------|--------------|---------|
+| [Type] | [Count] | [X%] | [Count] |
 
-### Implementation Verification Checklist
+## Validation Results
 
-Complete this checklist before documenting fixes:
+### 1. Configuration Validation
 
-- [ ] All code changes are implemented
-- [ ] Unit tests are written and passing
-- [ ] Integration tests are passing
-- [ ] Performance metrics are collected
-- [ ] Security tests are passing (if applicable)
-- [ ] Code review is completed
-- [ ] Test results are documented
-- [ ] All success criteria are met
-- [ ] Compliance requirements are verified
+```mermaid
+graph TD
+    A[Schema Validation] -->|Pass/Fail| B[Rule Validation]
+    B -->|Pass/Fail| C[Integration Tests]
+    C -->|Pass/Fail| D[Performance Tests]
+    
+    style A fill:#d0e0ff
+    style D fill:#d0ffdb
+```
 
-### Issue Updates
-- Only document issues that have COMPLETED all verification steps
-- Include before/after code that matches ACTUAL implementation
-- Include real test results and measurements
-- Document any deviations from original plan with justification
+| Test Type | Pass Rate | Issues Found | Resolution |
+|-----------|-----------|--------------|------------|
+| Schema | [X%] | [Count] | [Status] |
+| Rules | [X%] | [Count] | [Status] |
+| Integration | [X%] | [Count] | [Status] |
 
-### Final Report Validation
+### 2. Code Validation
 
-Before submitting the final report, verify:
+| Test Suite | Coverage | Pass Rate | Issues |
+|------------|----------|-----------|---------|
+| Unit | [X%] | [Y%] | [Count] |
+| Integration | [X%] | [Y%] | [Count] |
+| End-to-End | [X%] | [Y%] | [Count] |
 
-- [ ] All documented fixes match actual implemented code
-- [ ] All test results are accurate and current
-- [ ] Performance measurements reflect actual improvements
-- [ ] Compliance status is accurately reported
-- [ ] All diagrams reflect the current state of the system
-- [ ] No planned but unimplemented changes are included
+### 3. Performance Validation
+
+#### Response Time Impact
+
+```mermaid
+graph LR
+    subgraph Before
+        B1[Avg: Xms]
+        B2[P95: Xms]
+    end
+    
+    subgraph After
+        A1[Avg: Yms]
+        A2[P95: Yms]
+    end
+```
+
+| Metric | Before | After | Change | Status |
+|--------|---------|-------|--------|--------|
+| Throughput | [X/s] | [Y/s] | [Δ%] | ✅/⚠️/❌ |
+| Latency | [Xms] | [Yms] | [Δ%] | ✅/⚠️/❌ |
+| Memory | [XMB] | [YMB] | [Δ%] | ✅/⚠️/❌ |
+| CPU | [X%] | [Y%] | [Δ%] | ✅/⚠️/❌ |
+
+## Functional Correctness Report
+
+### Import and Dependency Changes
+
+| Change Type | Before | After | Status |
+|------------|---------|-------|--------|
+| Import Count | [X] | [Y] | ✅/⚠️/❌ |
+| Circular Dependencies | [X] | [Y] | ✅/⚠️/❌ |
+| Version Conflicts | [X] | [Y] | ✅/⚠️/❌ |
+| Unused Imports | [X] | [Y] | ✅/⚠️/❌ |
+
+### Type System Updates
+
+| Component | Type Coverage | Contract Status | Validation |
+|-----------|--------------|-----------------|------------|
+| [Component] | [X%] -> [Y%] | Complete/Partial | ✅/⚠️/❌ |
+
+### Data Flow Modifications
+
+```mermaid
+graph TD
+    A[Input Changes] --> B[Transform Changes]
+    B --> C[Processing Changes]
+    C --> D[Output Changes]
+    
+    style A fill:#d0e0ff
+    style D fill:#d0ffdb
+```
+
+| Flow Stage | Changes Made | Validation | Issues |
+|------------|-------------|------------|---------|
+| Input | [Description] | ✅/⚠️/❌ | [Count] |
+| Transform | [Description] | ✅/⚠️/❌ | [Count] |
+| Processing | [Description] | ✅/⚠️/❌ | [Count] |
+| Output | [Description] | ✅/⚠️/❌ | [Count] |
+
+### Bug Fix Validation
+
+| Bug ID | Fix Applied | Test Added | Status |
+|--------|------------|------------|---------|
+| [BUG-01] | [Description] | [Test ID] | Fixed/Pending |
+
+## Issue Resolution Documentation
+
+### Issue Implementation Matrix
+
+| Issue ID | Root Cause | Resolution | Validation Status | Regression Tests |
+|----------|------------|------------|------------------|------------------|
+| [CRIT-01] | [Description] | [Fix Details] | ✅/⚠️/❌ | All Passing |
+| [PERF-01] | [Description] | [Fix Details] | ✅/⚠️/❌ | All Passing |
+
+### Functional Correctness Validation
+
+#### Import and Dependency Analysis
+
+| Category | Before | After | Status |
+|----------|--------|-------|--------|
+| Total Imports | [Count] | [Count] | ✅/⚠️/❌ |
+| Unused Imports | [Count] | [Count] | ✅/⚠️/❌ |
+| Circular Dependencies | [Count] | [Count] | ✅/⚠️/❌ |
+| Version Conflicts | [Count] | [Count] | ✅/⚠️/❌ |
+
+#### Data Flow Verification
+
+```mermaid
+flowchart TD
+    A[Input Processing] --> B[Data Transformation]
+    B --> C[State Management]
+    C --> D[Output Generation]
+    
+    style A fill:#d0e0ff
+    style D fill:#d0ffdb
+```
+
+| Flow Stage | Validation Result | Issues Found | Resolution |
+|------------|------------------|--------------|------------|
+| Input Processing | ✅/⚠️/❌ | [Description] | [Fix] |
+| Data Transformation | ✅/⚠️/❌ | [Description] | [Fix] |
+| State Management | ✅/⚠️/❌ | [Description] | [Fix] |
+| Output Generation | ✅/⚠️/❌ | [Description] | [Fix] |
+
+#### Type System Analysis
+
+| Component | Type Coverage | Contract Compliance | Null Safety |
+|-----------|--------------|-------------------|-------------|
+| [Component] | [X%] | ✅/⚠️/❌ | ✅/⚠️/❌ |
+
+### Implementation Evidence
+
+#### 1. Root Cause Resolution
+```python
+# Before: Issue demonstration
+def problematic_code():
+    # Code showing the issue
+    pass
+
+# After: Fixed implementation
+def fixed_code():
+    # Code showing the fix
+    pass
+
+# Validation test
+def test_fix():
+    # Test verifying the fix
+    pass
+```
+
+#### 2. Regression Prevention
+```python
+def regression_test_suite():
+    """Comprehensive regression tests for the fix."""
+    # Implementation-specific tests
+    test_core_functionality()
+    test_edge_cases()
+    test_error_handling()
+    test_resource_management()
+```
+
+### Validation Results
+
+#### Functional Testing Results
+
+| Test Category | Pass Rate | Coverage | Issues Found |
+|--------------|-----------|----------|--------------|
+| Unit Tests | [X%] | [Y%] | [Count] |
+| Integration | [X%] | [Y%] | [Count] |
+| Edge Cases | [X%] | [Y%] | [Count] |
+
+#### Performance Impact
+
+| Metric | Before | After | Target | Status |
+|--------|--------|-------|--------|--------|
+| Response Time | [X ms] | [Y ms] | [Z ms] | ✅/⚠️/❌ |
+| Memory Usage | [X MB] | [Y MB] | [Z MB] | ✅/⚠️/❌ |
+| CPU Usage | [X%] | [Y%] | [Z%] | ✅/⚠️/❌ |
+
+### Implementation Verification
+
+#### 1. Functional Correctness
+- [ ] All imports properly managed
+- [ ] Type system fully compliant
+- [ ] Data flow validated
+- [ ] Resource management verified
+- [ ] Error handling complete
+
+#### 2. Issue Resolution
+- [ ] Root cause addressed
+- [ ] Tests verify fix
+- [ ] No regressions
+- [ ] Performance acceptable
+- [ ] Documentation updated
+
+#### 3. Integration Verification
+- [ ] Components compatible
+- [ ] Interfaces stable
+- [ ] Data flow clean
+- [ ] Error handling works
+- [ ] Resource cleanup proper
+
+## Issue Resolution
+
+### 1. Implementation Issues
+
+| Issue ID | Type | Resolution | Status |
+|----------|------|------------|--------|
+| [IMP-01] | Config/Code | [Description] | Resolved/Open |
+
+### 2. Migration Issues
+
+| Issue ID | Phase | Impact | Resolution |
+|----------|-------|--------|------------|
+| [MIG-01] | [Phase] | [Impact] | [Fix] |
+
+### 3. Validation Issues
+
+| Issue ID | Test | Resolution | Verified |
+|----------|------|------------|----------|
+| [VAL-01] | [Test] | [Fix] | Yes/No |
+
+## Documentation Updates
+
+### 1. Configuration Documentation
+
+```markdown
+### Updated Configurations
+- Schema changes:
+  - [List changes]
+- Business rules:
+  - [List changes]
+- Migration history:
+  - [List migrations]
+```
+
+### 2. API Documentation
+
+| Endpoint | Changes | Breaking | Migration Guide |
+|----------|---------|----------|-----------------|
+| [Path] | [List] | Yes/No | [Link] |
+
+### 3. User Documentation
+
+| Document | Section | Updates | Review Status |
+|----------|---------|---------|---------------|
+| [Doc] | [Section] | [Changes] | ✅/⚠️/❌ |
+
+## Quality Gates
+
+### 1. Implementation Gates
+
+- [ ] All configuration changes validated
+- [ ] Schema migrations successful
+- [ ] Business rules implemented
+- [ ] Code changes complete
+- [ ] Tests updated and passing
+
+### 2. Testing Gates
+
+- [ ] Unit test coverage ≥90%
+- [ ] Integration tests passing
+- [ ] Performance targets met
+- [ ] Security review complete
+- [ ] Migration tests successful
+
+### 3. Documentation Gates
+
+- [ ] Configuration changes documented
+- [ ] API changes documented
+- [ ] Migration guide complete
+- [ ] Release notes prepared
+- [ ] User documentation updated
+
+## Sign-off
+
+### Technical Sign-off
+
+| Role | Name | Status | Date |
+|------|------|--------|------|
+| Tech Lead | [Name] | ✅/⚠️/❌ | [Date] |
+| Security | [Name] | ✅/⚠️/❌ | [Date] |
+| QA | [Name] | ✅/⚠️/❌ | [Date] |
+
+### Business Sign-off
+
+| Role | Name | Status | Date |
+|------|------|--------|------|
+| Product Owner | [Name] | ✅/⚠️/❌ | [Date] |
+| Stakeholder | [Name] | ✅/⚠️/❌ | [Date] |
+
+## Release Plan
+
+### 1. Deployment Steps
+
+```mermaid
+sequenceDiagram
+    participant Prep as Preparation
+    participant Config as Configuration
+    participant Code as Code
+    participant Val as Validation
+    
+    Prep->>Config: Deploy Configs
+    Config->>Code: Deploy Code
+    Code->>Val: Validate
+    Val-->>Config: Rollback if needed
+```
+
+### 2. Rollback Plan
+
+| Component | Rollback Method | Verification | Owner |
+|-----------|----------------|--------------|-------|
+| Config | [Method] | [Tests] | [Name] |
+| Code | [Method] | [Tests] | [Name] |
+| Data | [Method] | [Tests] | [Name] |
+
+### 3. Monitoring Plan
+
+| Metric | Alert Threshold | Response Plan | Owner |
+|--------|----------------|---------------|-------|
+| [Metric] | [Threshold] | [Plan] | [Name] |
+
+## Appendices
+
+### A. Performance Test Results
+[Detailed metrics and analysis]
+
+### B. Security Review Results
+[Security validation details]
+
+### C. Migration Scripts
+[Configuration and data migration scripts]
+
+### D. Test Reports
+[Comprehensive test results]

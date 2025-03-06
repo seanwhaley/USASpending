@@ -1,65 +1,207 @@
 ---
 theme: light
-title: USASpending Code Review System Introduction
+title: Code Review System Introduction
 description: Introduction and guide to the code review templates and process
-version: 1.0.4
+version: 1.0.0
 ---
 
-# USASpending Code Review System
+# Code Review System
 
 ## Overview
 
-This system provides a comprehensive framework for conducting and documenting code reviews, tracking improvements, and maintaining a history of changes. It implements industry-standard methodologies and complies with key ISO standards:
+This system provides a comprehensive framework for conducting and documenting code reviews, tracking improvements, and maintaining a history of changes. It implements industry-standard methodologies and complies with key ISO standards.
 
-1. [Kepner-Tregoe Problem Analysis](https://www.kepner-tregoe.com/problem-solving-decision-making/) for systematic problem identification and resolution
-2. Six Thinking Hats method by Edward de Bono for comprehensive perspective analysis
-3. [DMAIC (Define, Measure, Analyze, Improve, Control)](https://asq.org/quality-resources/dmaic) from Six Sigma for process improvement
-4. [PDCA (Plan, Do, Check, Act)](https://asq.org/quality-resources/pdca-cycle) cycle for continuous improvement
-
-This integration follows guidelines from:
-- [ISO/IEC 20246:2017](https://www.iso.org/standard/67531.html) - Software and systems engineering — Work product reviews
-- [ISO/IEC 20000-1:2018](https://www.iso.org/standard/70636.html) - IT Service Management System requirements
-- [ISO/IEC 27001:2022](https://www.iso.org/standard/27001) - Information Security Management Systems
-- [CMMI Development v2.0](https://cmmiinstitute.com/) - Verification and Validation processes
-- [IEEE 1028-2008](https://standards.ieee.org/ieee/1028/4606/) - Software Reviews and Audits
-
-## Review Process Flow
-
-The following diagram illustrates how the templates and processes connect in the review lifecycle:
+## Template Organization
 
 ```mermaid
-flowchart TD
-    A[Review Initiation] --> B[Code Analysis]
-    B --> C[Documentation]
-    C --> D[Update Planning]
-    D --> E[Implementation]
-    E --> F[Verification]
-    F --> G[Final Report]
+graph TD
+    A[00_introduction.md] --> B[001_YAML_Explanation.md]
+    A --> C[01_AI_Prompts.md]
+    A --> D[02_review_instructions.md]
+    A --> E[03_review_template.md]
+    A --> F[04_update_instructions.md]
+    A --> G[05_update_template.md]
+    A --> H[06_implementation_instructions.md]
+    A --> I[07_implementation_template.md]
     
-    style A fill:#d0e0ff
-    style G fill:#d0ffdb
+    B <-->|Config Spec| H
+    C <-->|Review Start| D
+    D <-->|Analysis| E
+    E <-->|Findings| F
+    F <-->|Changes| G
+    G <-->|Updates| H
+    H <-->|Implementation| I
+    
+    B -->|Technical Spec| J[Configuration Implementation]
+    C -->|Review Process| K[Review Phase]
+    D -->|Analysis Guide| K
+    E -->|Documentation| K
+    F -->|Change Process| L[Update Phase]
+    G -->|Change Tracking| L
+    H -->|Implementation Guide| M[Implementation Phase]
+    I -->|Implementation Doc| M
+    
+    style A fill:#f9f9f9
+    style J fill:#ffd0d0
+    style K fill:#d0ffd0
+    style L fill:#d0d0ff
+    style M fill:#ffd0ff
 ```
 
-### Process Stages
+### Template Purposes
 
-1. **Review Initiation**: Define scope and objectives using `01_review_prompt.md`
-2. **Code Analysis**: Analyze code using approaches in `02_review_instructions.md`
-3. **Documentation**: Record findings using `03_review_template.md`
-4. **Update Planning**: Plan changes using `04_update_instructions.md`
-5. **Implementation**: Implement changes using patterns in `05_update_template.md`
-6. **Verification**: Verify changes address identified issues
-7. **Final Report**: Compile final documentation of changes and improvements
+1. **System Foundation**
+   - `00_introduction.md`: Overall system guidance and navigation
+   - `001_YAML_Explanation.md`: Technical specification for YAML configuration
+
+2. **Review Process**
+   - `01_AI_Prompts.md`: Structured prompts for reviews with cross-references and comprehensive system review template
+   - `02_review_instructions.md`: Detailed analysis methodology and root cause analysis framework
+   - `03_review_template.md`: Comprehensive review documentation with issue tracking
+
+3. **Change Management**
+   - `04_update_instructions.md`: Guide for implementing changes with validation requirements
+   - `05_update_template.md`: Change documentation and implementation tracking
+
+4. **Implementation**
+   - `06_implementation_instructions.md`: Implementation methodology with patterns and examples
+   - `07_implementation_template.md`: Implementation verification and resolution tracking
+
+## Configuration-First Principles
+
+### Configuration as Source of Truth
+The system follows configuration-driven development principles where YAML configuration files serve as the source of truth for:
+
+1. System Settings
+   - Global processing parameters
+   - I/O configurations
+   - Error handling strategies
+   - Logging behaviors
+
+2. Business Rules
+   - Data validation rules
+   - Transformation logic
+   - Processing workflows
+   - Integration patterns
+
+### Configuration Hierarchy
+1. System Configuration
+   - Base system behavior
+   - Infrastructure settings
+   - Global parameters
+
+2. Business Rules
+   - Data validations
+   - Transformations
+   - Workflow definitions
+
+3. Code Implementation
+   - Configuration interpreters
+   - Infrastructure code
+   - Processing engines
+
+### When to Update Configuration vs Code
+
+| Change Type | Update Configuration | Update Code |
+|------------|---------------------|-------------|
+| Business Rules | ✅ | ❌ |
+| Validation Logic | ✅ | ❌ |
+| Data Transforms | ✅ | ❌ |
+| Infrastructure | ❌ | ✅ |
+| Performance | ❌ | ✅ |
+| Security | ❌ | ✅ |
+
+## Conducting the Review
+
+### Review Preparation
+
+1. **Scope Definition**
+   - Identify components for review
+   - Select appropriate templates
+   - Gather baseline metrics
+   - Review configuration coverage
+
+2. **Context Collection**
+   - Review configuration files
+   - Examine component relationships
+   - Check integration points
+   - Map data flows
+
+3. **Analysis Planning**
+   - Choose analysis methods
+   - Define success criteria
+   - Plan validation approach
+   - Set up monitoring
+
+### Review Process Flow
+
+```mermaid
+graph TD
+    A[Review Initiation] --> B[Configuration Analysis]
+    B --> C[Code Analysis]
+    C --> D[Documentation]
+    D --> E[Update Planning]
+    E --> F[Implementation]
+    F --> G[Verification]
+    G --> H[Final Report]
+    
+    style A fill:#d0e0ff
+    style H fill:#d0ffdb
+```
+
+### Analysis Methodology
+
+1. **Configuration Review**
+   - Schema completeness
+   - Rule coverage
+   - Relationship definitions
+   - Validation patterns
+
+2. **Code Review**
+   - Implementation patterns
+   - Resource management
+   - Error handling
+   - Performance characteristics
+
+3. **Integration Review**
+   - Component interactions
+   - Resource sharing
+   - Error propagation
+   - Data flow patterns
+
+### Documentation Requirements
+
+1. **Review Documentation**
+   - Use `03_review_template.md`
+   - Include configuration analysis
+   - Document root causes
+   - Provide evidence
+
+2. **Update Planning**
+   - Follow `04_update_instructions.md`
+   - Plan configuration changes
+   - Define code updates
+   - Set success criteria
+
+3. **Implementation**
+   - Use `06_implementation_instructions.md`
+   - Document with `07_implementation_template.md`
+   - Validate changes
+   - Verify improvements
 
 ## File Structure
 
 ```
 docs/templates/
 ├── 00_introduction.md         # This file - System overview and guidance
-├── 01_review_prompt.md        # Initial AI prompt for code reviews
+├── 001_YAML_Explanation.md    # Technical specification for YAML configuration
+├── 01_AI_Prompts.md          # Initial AI prompt for code reviews
 ├── 02_review_instructions.md  # Detailed instructions for review process
 ├── 03_review_template.md      # Template for review documentation
 ├── 04_update_instructions.md  # Instructions for tracking changes
-└── 05_update_template.md      # Template for update documentation
+├── 05_update_template.md      # Template for update documentation
+├── 06_implementation_instructions.md  # Implementation process guide
+└── 07_implementation_template.md      # Implementation documentation template
 ```
 
 ## Template Selection Guide
@@ -69,11 +211,13 @@ Use this decision tree to select the appropriate template for your current task:
 ```mermaid
 flowchart TD
     START[Start Review Process] --> Q1{What are you doing?}
-    Q1 -->|Starting a new review| T1[01_review_prompt.md]
+    Q1 -->|Starting a new review| T1[01_AI_Prompts.md]
     Q1 -->|Conducting analysis| T2[02_review_instructions.md]
     Q1 -->|Documenting findings| T3[03_review_template.md]
     Q1 -->|Planning updates| T4[04_update_instructions.md]
-    Q1 -->|Implementing changes| T5[05_update_template.md]
+    Q1 -->|Tracking changes| T5[05_update_template.md]
+    Q1 -->|Implementing changes| T6[06_implementation_instructions.md]
+    Q1 -->|Documenting implementation| T7[07_implementation_template.md]
     
     T1 -->|For focused performance review| S1[Use performance section focus]
     T1 -->|For security audit| S2[Use security section focus]
@@ -84,6 +228,61 @@ flowchart TD
     style S2 fill:#d0ffd0
     style S3 fill:#d0d0ff
 ```
+
+### Review Type Decision Matrix
+
+| Focus Area | Primary Template | Supporting Templates | Key Sections to Use |
+|------------|-----------------|---------------------|-------------------|
+| Full System | 03_review_template.md | All templates | Comprehensive System Review section |
+| Functional | 03_review_template.md | 02_review_instructions.md | Functional Analysis, Correctness Verification |
+| Configuration | 03_review_template.md | 001_YAML_Explanation.md, 02_review_instructions.md | Configuration Analysis, Schema Validation |
+| Performance | 03_review_template.md | 02_review_instructions.md | Performance Metrics, Resource Utilization |
+| Security | 03_review_template.md | 02_review_instructions.md | Security Analysis, Risk Assessment |
+| Architecture | 03_review_template.md | 02_review_instructions.md | System Context, Component Interactions |
+| Implementation | 07_implementation_template.md | 06_implementation_instructions.md | Configuration Changes, Code Changes |
+
+### Review Type Focus Areas
+
+| Review Type | Key Templates | Special Considerations |
+|-------------|---------------|------------------------|
+| Functional | 02, 03, 05 | Focus on correctness, error handling, data flow, and import dependencies |
+| Performance | 02, 03, 05 | Focus on bottlenecks, resource usage, and processing time |
+| Security | 02, 03, 05 | Focus on input validation, authentication, and data protection |
+| Compliance | 01, 03, 04 | Focus on standard requirements and documentation |
+| Architecture | 02, 03 | Focus on component relationships and dependencies |
+| Full System | All templates | Use comprehensive analysis with all templates |
+
+### Component Review Focus Areas
+
+When reviewing specific components, focus on these key aspects:
+
+1. **Performance Metrics**
+   - Processing throughput
+   - Memory utilization patterns 
+   - Cache efficiency metrics
+   - Error rates and types
+   - Component coupling metrics
+
+2. **Resource Management**
+   - Memory growth patterns
+   - Connection pooling efficiency
+   - Resource cleanup verification
+   - Cache eviction strategies
+   - Thread pool utilization
+
+3. **Component Health**
+   - Error rates and patterns
+   - Recovery success metrics
+   - Resource utilization trends
+   - Cache hit rates
+   - Response time distributions
+
+4. **Integration Points**
+   - Cross-component dependencies
+   - Interface contracts
+   - Error propagation paths
+   - Resource sharing patterns
+   - Data flow efficiency
 
 ### Review Type Focus Areas
 
@@ -111,10 +310,13 @@ When reviewing USASpending code, pay special attention to these common component
 ### Scenario 1: New Feature Review
 A team has implemented a new data processing pipeline and needs a thorough review:
 
-1. Use [`01_review_prompt.md`](#starting-a-new-review) to initiate review
-2. AI follows [`02_review_instructions.md`](#conducting-the-review) for analysis
-3. Results documented using [`03_review_template.md`](#review-documentation)
-4. Changes tracked with [`04_update_instructions.md`](#implementing-changes) and [`05_update_template.md`](#update-documentation)
+1. Use `01_AI_Prompts.md` to initiate review
+2. Follow `02_review_instructions.md` for analysis
+3. Document findings in `03_review_template.md`
+4. Plan changes with `04_update_instructions.md`
+5. Track updates in `05_update_template.md`
+6. Follow `06_implementation_instructions.md` for implementation
+7. Document implementation in `07_implementation_template.md`
 
 ### Scenario 2: Performance Optimization
 Team needs to improve system performance:
@@ -167,52 +369,16 @@ using (var connection = new DatabaseConnection())
 
 ### Starting a New Review {#starting-a-new-review}
 1. Read this introduction to understand the system
-2. Copy the prompt from [`01_review_prompt.md`](./01_review_prompt.md)
+2. Copy the prompt from `01_AI_Prompts.md`
 3. Customize the project area and target files
 4. Submit to your AI assistant
-5. Review generates in `docs/reports` using [`03_review_template.md`](./03_review_template.md)
-
-> [!TIP]
-> The prompt structure follows Kepner-Tregoe's systematic approach to problem analysis.
+5. Follow `02_review_instructions.md` for analysis methodology
+6. Document review in `03_review_template.md`
+7. Plan updates using `04_update_instructions.md` and `05_update_template.md`
+8. Implement changes following `06_implementation_instructions.md`
+9. Document implementation using `07_implementation_template.md`
 
 ### Conducting the Review {#conducting-the-review}
-1. AI follows [`02_review_instructions.md`](./02_review_instructions.md)
-2. Uses Six Thinking Hats methodology:
-   - White Hat: Facts and data
-   - Red Hat: Intuition and feelings
-   - Black Hat: Risks and problems
-   - Yellow Hat: Benefits and value
-   - Green Hat: Creative solutions
-   - Blue Hat: Process management
-
-3. Documents findings using DMAIC framework:
-   - Define: Scope and objectives
-   - Measure: Metrics and data
-   - Analyze: Root causes
-   - Improve: Solutions
-   - Control: Sustainability
-
-4. Prioritizes issues and creates action plan
-
-### Implementing Changes {#implementing-changes}
-1. Follow PDCA cycle from [`04_update_instructions.md`](./04_update_instructions.md):
-   - Plan: Design changes
-   - Do: Implement solutions
-   - Check: Verify results
-   - Act: Standardize improvements
-
-2. Document changes using [`05_update_template.md`](./05_update_template.md)
-3. Add updates to original review file
-4. Track metrics and progress
-
-### Quality Gates {#quality-gates}
-Based on [CISQ Quality Standard](https://www.it-cisq.org/standards/):
-1. Code changes verified
-2. Tests passing
-3. Documentation updated
-4. Performance validated
-5. Review approved
-
 ### Security and Service Considerations
 1. Data Classification
    - Identify sensitive data
@@ -235,178 +401,44 @@ Based on [CISQ Quality Standard](https://www.it-cisq.org/standards/):
 ## Methodology Integration
 
 ### Kepner-Tregoe Analysis
-Used in [`01_review_prompt.md`](./01_review_prompt.md) for:
+Used in `01_AI_Prompts.md` for:
 - Situation Analysis
 - Problem Analysis
 - Decision Analysis
 - Potential Problem Analysis
 
 ### Six Thinking Hats
-Implemented in [`02_review_instructions.md`](./02_review_instructions.md) for:
+Implemented in `02_review_instructions.md` for:
 - Comprehensive analysis
 - Multiple perspectives
 - Balanced evaluation
 - Solution generation
 
 ### DMAIC Framework
-Structures [`03_review_template.md`](./03_review_template.md) with:
+Structures `03_review_template.md` with:
 - Clear phase progression
 - Metric-based decisions
 - Root cause analysis
 - Solution validation
 
 ### PDCA Cycle
-Guides updates through [`04_update_instructions.md`](./04_update_instructions.md) and [`05_update_template.md`](./05_update_template.md) with:
-- Iterative improvement
-- Continuous learning
-- Process refinement
-- Quality assurance
+Guides implementation through `06_implementation_instructions.md` and `07_implementation_template.md` with:
+- Configuration-first approach
+- Systematic validation
+- Metrics-driven verification
+- Continuous improvement
 
-## Compliance Requirements
-
-### ISO/IEC 20000 Alignment
-The review process supports IT Service Management by:
-1. Change Management
-   - Risk assessment of changes
-   - Impact analysis documentation
-   - Rollback planning
-   - Service continuity checks
-
-2. Problem Management
-   - Root cause analysis
-   - Systematic problem resolution
-   - Knowledge base updates
-   - Prevention measures
-
-3. Release Management
-   - Implementation planning
-   - Testing requirements
-   - Deployment verification
-   - Service level monitoring
-
-### ISO/IEC 27001 Integration
-Security considerations are embedded throughout:
-1. Access Control
-   - Code access patterns
-   - Authentication methods
-   - Authorization flows
-   - Privilege management
-
-2. Cryptography
-   - Encryption methods
-   - Key management
-   - Secure communications
-   - Data protection
-
-3. Operations Security
-   - Error handling
-   - Logging practices
-   - Monitoring points
-   - Incident response
-
-4. System Security
-   - Input validation
-   - Output encoding
-   - Session management
-   - Configuration security
-
-## Best Practices
-
-### For Reviewers
-Based on [SEI's Code Review Guidelines](https://resources.sei.cmu.edu/library/):
-1. Follow the structured approach
-2. Document thoroughly
-3. Use provided templates
-4. Track metrics consistently
-5. Validate changes
-
-### For AI Agents
-Following [NIST AI Risk Management Framework](https://www.nist.gov/itl/ai-risk-management-framework):
-1. Follow instruction templates exactly
-2. Provide specific examples
-3. Include visual documentation
-4. Reference file locations precisely
-5. Track all changes
-
-### For Project Managers
-Aligned with [PMI PMBOK Guide](https://www.pmi.org/pmbok-guide-standards):
-1. Monitor progress metrics
-2. Review quality gates
-3. Track completion status
-4. Ensure documentation
-5. Verify improvements
-
-### For Security Reviews
-Following ISO/IEC 27001:2022:
-1. Apply security-by-design principles
-2. Check OWASP Top 10 compliance
-3. Validate access controls
-4. Verify data protection
-5. Review incident handling
-
-### For Service Management
-Following ISO/IEC 20000-1:2018:
-1. Document service impacts
-2. Plan for continuity
-3. Monitor performance
-4. Manage changes
-5. Track incidents
-
-### Scope Definition Best Practices
-1. **Clear Boundaries**
-   - Good: "Review entity processing pipeline memory usage"
-   - Avoid: "Make code better" or "Review the entire codebase"
-
-2. **Detailed Issue Documentation**
-   - Include specific file paths and line numbers
-   - Provide measurable impact indicators
-   - Include code examples for both problems and solutions
-
-3. **Analysis Integration**
-   - Combine technical, business, and user perspectives
-   - Cross-reference related issues
-   - Highlight dependencies between components
-
-4. **Effective Prioritization**
-   - Assign clear priority levels (Critical, Important, Minor)
-   - Consider both impact and implementation complexity
-   - Document dependencies between issues
+### SOLID Principles
+Applied in `06_implementation_instructions.md` for:
+- Configuration separation
+- Interface design
+- Class responsibilities
+- Component coupling
 
 ## Changelog
 
-### Version 1.0.4 (2025-03-18)
-- Added review process flow diagram
-- Created template selection guide
-- Added best practices for scope definition
-- Enhanced real-world examples section
-- Added USASpending-specific component guidance
-
-### Version 1.0.3 (2025-03-17)
-- Added automatic source review identification for updates
-- Improved file naming consistency requirements
-- Updated update process to prevent file overwrites
-- Enhanced template cross-referencing
-
-### Version 1.0.2 (2025-03-16)
-- Added ISO/IEC 20000 compliance requirements
-- Integrated ISO/IEC 27001 security controls
-- Enhanced service management aspects
-- Added security review guidelines
-
-### Version 1.0.1 (2025-03-15)
-- Added authoritative sources and references
-- Included example scenarios
-- Added cross-references between sections
-- Enhanced methodology explanations
-
-### Version 1.0.0 (2025-03-14)
+### Version 1.0.0 (2025-03-06)
 - Initial release of structured template system
-- Added 00_introduction.md
-- Implemented 01_review_prompt.md with Kepner-Tregoe framework
-- Created 02_review_instructions.md with Six Thinking Hats methodology
-- Developed 03_review_template.md using DMAIC framework
-- Added 04_update_instructions.md with PDCA cycle
-- Created 05_update_template.md for progress tracking
 
 ## Support and Maintenance
 

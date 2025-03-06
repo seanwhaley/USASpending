@@ -1,384 +1,202 @@
 ---
 theme: light
-title: USASpending Code Update Template
-description: Template for documenting code updates and changes
-version: 2.1.0
+title: Implementation Update Report
+description: Template for documenting implementation updates with configuration and code changes
+version: 1.0.0
 ---
 
-# USASpending Code Update Template
+# Implementation Update Report
 
-## Update Summary
+## Update Overview
 
-**Update Date**: YYYY-MM-DD  
-**Updated By**: [Name/ID]  
-**Source Review**: [Link to original review]  
-**Focus Areas**: [Performance/Security/Architecture/Compliance]
+**Update Date**: [YYYY-MM-DD]
+**Implementer**: [Name/Team]
+**Update Type**: [Configuration/Code/Both]
+**Components**: [List affected components]
+**Review Reference**: [Link to original review]
 
-### Implementation Scope
+## Configuration Changes
 
-**Issues Addressed**:
-- [CRIT-01] [Issue Title]
-- [IMP-02] [Issue Title]
-- [MIN-03] [Issue Title]
+### Schema Updates
 
-### Impact Summary
+| Schema | Change Type | Breaking? | Migration Required |
+|--------|------------|-----------|-------------------|
+| [Name] | Added/Modified/Removed | Yes/No | Yes/No |
 
-| Area | Before | After | Improvement |
-|------|--------|-------|-------------|
-| Memory Usage | #MB | #MB | #% |
-| Response Time | #ms | #ms | #% |
-| Error Rate | #% | #% | #% |
-| [Custom Metric] | # | # | #% |
+#### Schema Migration Plan
+```yaml
+# Example schema migration
+old_schema:
+  field: string
+  
+new_schema:
+  field:
+    type: string
+    format: email
+    required: true
+```
 
-### Key Changes
+### Business Rule Updates
 
-[Brief overview of key changes - 3-5 bullets]
+| Rule Area | Change | Impact | Validation Status |
+|-----------|--------|--------|-------------------|
+| [Area] | [Description] | [Impact] | ✅/⚠️/❌ |
 
-## Plan Phase
+### Entity Model Changes
 
-### Issue Analysis
+| Entity | Change | Migration | Status |
+|--------|--------|-----------|--------|
+| [Name] | [Description] | Required/Optional | ✅/⚠️/❌ |
 
-| Issue ID | Priority | Complexity | Dependencies | Impact |
-|----------|----------|------------|--------------|--------|
-| CRIT-01 | P1 | Complex | None | High |
-| IMP-02 | P2 | Moderate | CRIT-01 | Medium |
-| MIN-03 | P3 | Simple | None | Low |
+### Configuration Metrics
 
-### Implementation Strategy
+| Metric | Before | After | Target | Status |
+|--------|--------|-------|--------|--------|
+| Schema Coverage | [X%] | [Y%] | >95% | ✅/⚠️/❌ |
+| Rule Coverage | [X%] | [Y%] | >90% | ✅/⚠️/❌ |
+| Validation Rate | [X%] | [Y%] | >98% | ✅/⚠️/❌ |
+| Config Load Time | [Xms] | [Yms] | <100ms | ✅/⚠️/❌ |
+
+## Code Changes
+
+### Critical Changes
+
+| Change ID | Description | Files Changed | Status |
+|-----------|-------------|---------------|--------|
+| [CHG-01] | [Description] | [Files] | Complete/In Progress |
+
+### Important Changes
+
+| Change ID | Description | Files Changed | Status |
+|-----------|-------------|---------------|--------|
+| [CHG-02] | [Description] | [Files] | Complete/In Progress |
+
+### Code Metrics
+
+| Metric | Before | After | Target | Status |
+|--------|--------|-------|--------|--------|
+| Test Coverage | [X%] | [Y%] | >90% | ✅/⚠️/❌ |
+| Complexity | [X] | [Y] | <10 | ✅/⚠️/❌ |
+| Dependencies | [X] | [Y] | <5 | ✅/⚠️/❌ |
+| Error Handlers | [X%] | [Y%] | 100% | ✅/⚠️/❌ |
+
+## Validation Results
+
+### Configuration Validation
 
 ```mermaid
-gantt
-    title Implementation Plan
-    dateFormat  YYYY-MM-DD
+graph TD
+    A[Schema Validation] -->|Pass/Fail| B[Load Testing]
+    B -->|Pass/Fail| C[Integration Testing]
+    C -->|Pass/Fail| D[Performance Testing]
     
-    section Critical Issues
-    CRIT-01 [Issue Name]     :crit, c1, 2023-01-01, 5d
-    
-    section Important Issues
-    IMP-02 [Issue Name]      :i1, after c1, 7d
-    
-    section Minor Issues
-    MIN-03 [Issue Name]      :m1, after i1, 3d
+    style A fill:#d0e0ff
+    style D fill:#d0ffdb
 ```
 
-### Success Criteria
+| Test Type | Result | Issues Found | Status |
+|-----------|--------|--------------|--------|
+| Schema | [Result] | [Count] | ✅/⚠️/❌ |
+| Load | [Result] | [Count] | ✅/⚠️/❌ |
+| Integration | [Result] | [Count] | ✅/⚠️/❌ |
+| Performance | [Result] | [Count] | ✅/⚠️/❌ |
 
-| Issue ID | Success Criteria | Verification Method |
-|----------|------------------|---------------------|
-| CRIT-01 | [Measurable outcome] | [Test/Review method] |
-| IMP-02 | [Measurable outcome] | [Test/Review method] |
-| MIN-03 | [Measurable outcome] | [Test/Review method] |
+### Code Validation
 
-## Do Phase
+| Test Suite | Pass Rate | Coverage | Issues |
+|------------|-----------|----------|---------|
+| Unit | [X%] | [Y%] | [Count] |
+| Integration | [X%] | [Y%] | [Count] |
+| Performance | [X%] | N/A | [Count] |
 
-### Critical Issue Implementations
+## Performance Impact
 
-#### [CRIT-01] [Issue Title]
-
-**Original Issue**: [Brief description from the review]
-
-**Root Cause**: [Analysis of why the issue existed]
-
-**Implementation**:
-
-```csharp
-// BEFORE: Original problematic code
-public void ProcessEntities(List<Entity> entities)
-{
-    var connection = new DatabaseConnection();
-    foreach (var entity in entities)
-    {
-        // Process entity using connection
-    }
-    // Connection never disposed
-}
-
-// AFTER: Improved implementation
-public void ProcessEntities(List<Entity> entities)
-{
-    using (var connection = new DatabaseConnection())
-    {
-        foreach (var entity in entities)
-        {
-            // Process entity using connection
-        }
-    } // Connection automatically disposed
-}
-```
-
-**Implementation Notes**:
-- Added `using` statement to ensure proper database connection disposal
-- Added validation to prevent processing invalid entities
-- Improved error handling to ensure resources are cleaned up
-- Updated unit tests to verify proper disposal
-
-### Important Issue Implementations
-
-#### [IMP-02] [Issue Title]
-
-**Original Issue**: [Brief description from the review]
-
-**Root Cause**: [Analysis of why the issue existed]
-
-**Implementation**:
-
-```csharp
-// BEFORE: Inefficient data transformation
-public IEnumerable<OutputDto> TransformData(IEnumerable<InputData> data)
-{
-    var results = new List<OutputDto>();
-    foreach (var item in data)
-    {
-        var output = new OutputDto();
-        // ... transformation logic
-        results.Add(output);
-    }
-    return results;
-}
-
-// AFTER: Optimized transformation using LINQ
-public IEnumerable<OutputDto> TransformData(IEnumerable<InputData> data)
-{
-    return data.Select(item => new OutputDto
-    {
-        // ... transformation logic
-    });
-}
-```
-
-**Implementation Notes**:
-- Replaced inefficient foreach loop with LINQ
-- Eliminated unnecessary intermediate list creation
-- Reduced memory allocations by using deferred execution
-- Added performance tests to verify improvement
-
-### Minor Issue Implementations
-
-#### [MIN-03] [Issue Title]
-
-**Original Issue**: [Brief description from the review]
-
-**Implementation**:
-
-```csharp
-// BEFORE: Inconsistent naming
-public void Process_data(string Data)
-{
-    // Implementation
-}
-
-// AFTER: Consistent naming following standards
-public void ProcessData(string data)
-{
-    // Implementation
-}
-```
-
-**Implementation Notes**:
-- Standardized method and parameter naming
-- Applied consistent casing conventions
-- Updated calling code for new method signatures
-- Ran style checker to verify compliance
-
-## Standard Implementation Patterns
-
-### Memory Management Pattern
-
-```csharp
-// Anti-pattern: Manual resource management
-var resource = new ExpensiveResource();
-try
-{
-    // Use resource
-}
-finally
-{
-    resource.Dispose();
-}
-
-// Recommended pattern: Using statement
-using (var resource = new ExpensiveResource())
-{
-    // Use resource
-} // Automatically disposed
-```
-
-### Async/Await Pattern
-
-```csharp
-// Anti-pattern: Blocking async calls
-public void ProcessData()
-{
-    var result = GetDataAsync().Result; // Blocks thread, potential deadlock
-    // Process result
-}
-
-// Recommended pattern: Async all the way
-public async Task ProcessDataAsync()
-{
-    var result = await GetDataAsync(); // Non-blocking
-    // Process result
-}
-```
-
-### Validation Pattern
-
-```csharp
-// Anti-pattern: Nested validation
-public void ProcessEntity(Entity entity)
-{
-    if (entity != null)
-    {
-        if (entity.Id > 0)
-        {
-            if (!string.IsNullOrEmpty(entity.Name))
-            {
-                // Process valid entity
-            }
-        }
-    }
-}
-
-// Recommended pattern: Early validation
-public void ProcessEntity(Entity entity)
-{
-    // Validate all preconditions upfront
-    if (entity == null)
-        throw new ArgumentNullException(nameof(entity));
-        
-    if (entity.Id <= 0)
-        throw new ArgumentException("Invalid ID", nameof(entity));
-        
-    if (string.IsNullOrEmpty(entity.Name))
-        throw new ArgumentException("Name is required", nameof(entity));
-    
-    // Process valid entity
-}
-```
-
-## Check Phase
-
-### Verification Results
-
-| Issue ID | Success Criteria | Result | Status |
-|----------|------------------|--------|--------|
-| CRIT-01 | [Criteria from Plan] | [Actual result] | ✅/⚠️/❌ |
-| IMP-02 | [Criteria from Plan] | [Actual result] | ✅/⚠️/❌ |
-| MIN-03 | [Criteria from Plan] | [Actual result] | ✅/⚠️/❌ |
-
-### Performance Metrics
-
-#### Memory Usage
-
-```
-Before: 145MB peak memory usage during batch processing
-After:   87MB peak memory usage during batch processing
-Improvement: 40% reduction in memory consumption
-```
+### Response Time Changes
 
 ```mermaid
-bar
-    title Memory Usage Comparison (MB)
-    "Before" : 145
-    "After"  : 87
+graph LR
+    subgraph Before
+        B1[Avg: Xms]
+        B2[P95: Xms]
+        B3[Max: Xms]
+    end
+    
+    subgraph After
+        A1[Avg: Yms]
+        A2[P95: Yms]
+        A3[Max: Yms]
+    end
+    
+    B1 --> A1
+    B2 --> A2
+    B3 --> A3
 ```
 
-#### Response Time
+### Resource Utilization
 
-```
-Before: 450ms average response time for entity processing
-After:   380ms average response time for entity processing
-Improvement: 15.5% faster processing
-```
+| Resource | Before | After | Target | Status |
+|----------|--------|-------|--------|--------|
+| Memory | [X] | [Y] | [Target] | ✅/⚠️/❌ |
+| CPU | [X%] | [Y%] | [Target] | ✅/⚠️/❌ |
+| Disk I/O | [X] | [Y] | [Target] | ✅/⚠️/❌ |
+| Network | [X] | [Y] | [Target] | ✅/⚠️/❌ |
 
-```mermaid
-bar
-    title Response Time Comparison (ms)
-    "Before" : 450
-    "After"  : 380
-```
+## Issues and Risks
 
-### Test Results
+### Implementation Issues
 
-| Test Type | Pass | Fail | Skipped | Coverage |
-|-----------|------|------|---------|----------|
-| Unit Tests | # | # | # | #% |
-| Integration Tests | # | # | # | #% |
-| Performance Tests | # | # | # | N/A |
+| Issue | Impact | Resolution | Status |
+|-------|--------|------------|--------|
+| [ISS-01] | [Impact] | [Resolution] | Open/Resolved |
 
-### Code Quality Metrics
+### Identified Risks
 
-| Metric | Before | After | Change |
-|--------|--------|-------|--------|
-| Cyclomatic Complexity | # | # | #% |
-| Maintainability Index | # | # | #% |
-| Lines of Code | # | # | #% |
-| Technical Debt (hours) | # | # | #% |
+| Risk | Likelihood | Impact | Mitigation |
+|------|------------|--------|------------|
+| [RISK-01] | High/Medium/Low | [Impact] | [Strategy] |
 
-## Act Phase
+## Next Steps
 
-### Standardization
+### Remaining Work
 
-**Changes to Coding Standards**:
-- [Any standards updated as a result]
-- [New patterns established]
-- [Anti-patterns documented]
-
-**Documentation Updates**:
-- [List of documentation updated]
-- [New examples added]
-- [Guidelines revised]
-
-### Knowledge Sharing
-
-**Key Learnings**:
-- [Important insight 1]
-- [Important insight 2]
-- [Important insight 3]
-
-**Best Practices Identified**:
-- [Best practice 1]
-- [Best practice 2]
-- [Best practice 3]
+| Task | Priority | Effort | Timeline |
+|------|----------|--------|----------|
+| [Task-01] | High/Medium/Low | [Est.] | [Date] |
 
 ### Follow-up Actions
 
-| Action Item | Owner | Due Date | Priority |
-|-------------|-------|----------|----------|
-| [Action 1] | [Owner] | YYYY-MM-DD | High/Medium/Low |
-| [Action 2] | [Owner] | YYYY-MM-DD | High/Medium/Low |
-| [Action 3] | [Owner] | YYYY-MM-DD | High/Medium/Low |
+| Action | Owner | Due Date | Status |
+|--------|-------|----------|--------|
+| [Action-01] | [Name] | [Date] | Not Started |
 
-## Compliance Verification Checklists
+## Sign-off
 
-### ISO/IEC 20000 Verification
+### Quality Gates
 
-| Control | Requirement | Implementation | Status |
-|---------|------------|----------------|--------|
-| 8.1 | Incident Management Process | [How changes support this] | ✅/⚠️/❌ |
-| 8.2 | Problem Management Process | [How changes support this] | ✅/⚠️/❌ |
-| 9.1 | Change Management Process | [How changes support this] | ✅/⚠️/❌ |
-| 9.2 | Release Management Process | [How changes support this] | ✅/⚠️/❌ |
+- [ ] All schema validations passing
+- [ ] Configuration load tests successful
+- [ ] Integration tests passing
+- [ ] Performance targets met
+- [ ] Security requirements satisfied
 
-### ISO/IEC 27001 Verification
+### Approvals
 
-| Control | Requirement | Implementation | Status |
-|---------|------------|----------------|--------|
-| A.9 | Access Control | [How changes support this] | ✅/⚠️/❌ |
-| A.10 | Cryptography | [How changes support this] | ✅/⚠️/❌ |
-| A.12 | Operations Security | [How changes support this] | ✅/⚠️/❌ |
-| A.14 | System Development | [How changes support this] | ✅/⚠️/❌ |
+| Role | Name | Status | Date |
+|------|------|--------|------|
+| Technical Lead | [Name] | ✅/⚠️/❌ | [Date] |
+| Security Review | [Name] | ✅/⚠️/❌ | [Date] |
+| QA Validation | [Name] | ✅/⚠️/❌ | [Date] |
 
 ## Appendices
 
-### Appendix A: Detailed Performance Analysis
+### A. Configuration Changes
+[Detailed configuration changes with before/after comparisons]
 
-[Detailed performance metrics, graphs, and analysis]
+### B. Test Results
+[Comprehensive test results and analysis]
 
-### Appendix B: Code Change Details
+### C. Performance Data
+[Detailed performance metrics and comparisons]
 
-[Additional code examples and technical details]
-
-### Appendix C: Testing Artifacts
-
-[Test scripts, results, and validation evidence]
+### D. Migration Scripts
+[Any required configuration or data migration scripts]

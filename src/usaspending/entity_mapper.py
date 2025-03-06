@@ -57,22 +57,38 @@ class EntityMapper(BaseValidator):
                 return data[source]
         return None
 
+    def _generate_agency_key(self, data: Dict[str, Any], multi_source: Dict[str, Any]) -> Optional[str]:
+        """Generate a unique key for an agency entity using composite fields."""
+        # Get values for all key components
+        agency_code = self._get_field_value_from_sources(data, multi_source.get('agency_code', {}).get('sources', []))
+        sub_agency_code = self._get_field_value_from_sources(data, multi_source.get('sub_agency_code', {}).get('sources', []))
+        office_code = self._get_field_value_from_sources(data, multi_source.get('office_code', {}).get('sources', []))
+        
+        # Agency code is required
+        if not agency_code:
+            return None
+            
+        # Build composite key with available parts
+        key_parts = [agency_code]
+        if sub_agency_code:
+            key_parts.append(sub_agency_code)
+        if office_code:
+            key_parts.append(office_code)
+            
+        return ':'.join(key_parts)
+
     def _check_key_fields(self, data: Dict[str, Any], entity_type: str) -> bool:
         """Check if data contains required key fields for entity type."""
         entity_config = self.entities.get(entity_type, {})
         key_fields = entity_config.get('key_fields', [])
         field_mappings = entity_config.get('field_mappings', {})
         
-        # For agency specifically, check multi-source mappings
+        # For agency specifically, check multi-source mappings to ensure we have complete key
         if entity_type == 'agency':
             multi_source = field_mappings.get('multi_source', {})
-            # Need at least agency_code to identify an agency
-            agency_sources = multi_source.get('agency_code', {}).get('sources', [])
-            if agency_sources and any(source in data and data[source] for source in agency_sources):
-                logger.debug(f"Found agency key in sources: {agency_sources}")
-                return True
-            return False
-            
+            agency_key = self._generate_agency_key(data, multi_source)
+            return agency_key is not None
+        
         # For other entities, check direct and multi-source mappings for key fields
         for key_field in key_fields:
             # Check direct mappings first
@@ -163,6 +179,40 @@ class EntityMapper(BaseValidator):
                 if obj_result:
                     result[target_field] = obj_result
         return result
+
+    def _apply_reference_mappings(self, data: Dict[str, Any], mappings: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply reference field mappings."""
+        result = {}
+        for target_field, mapping in mappings.items():
+            if isinstance(mapping, dict) and mapping.get('type') == 'entity_reference':
+                entity_type = mapping.get('entity')
+                
+                # Handle key_field directly defined
+                if 'key_field' in mapping and mapping['key_field'] in data:
+                    key_value = data[mapping['key_field']]
+                    if key_value:
+                        result[target_field] = {
+                            'entity_type': entity_type,
+                            'data': {'id': key_value}
+                        }
+                        logger.debug(f"Created reference {target_field} to {entity_type} with key {key_value}")
+                
+                # Handle composite keys with key_fields
+                elif 'key_fields' in mapping:
+                    key_prefix = mapping.get('key_prefix', '')
+                    key_values = {}
+                    for key_field in mapping['key_fields']:
+                        field_name = f"{key_prefix}_{key_field}" if key_prefix else key_field
+                        if field_name in data and data[field_name]:
+                            key_values[key_field] = data[field_name]
+                    
+                    if key_values:
+                        result[target_field] = {
+                            'entity_type': entity_type,
+                            'reference_type': mapping.get('reference_type', 'default'),
+                            'data': key_values
+                        }
+        return result
         
     def map_entity(self, data: Any) -> Dict[str, Any]:
         """Map data to entity format using configuration mappings."""
@@ -190,26 +240,33 @@ class EntityMapper(BaseValidator):
             # Apply field mappings from entity definition
             field_mappings = entity_config.get('field_mappings', {})
             
-            # Apply multi-source mappings first for agency
+            # Special handling for agency entities
             if entity_type == 'agency':
                 multi_source = field_mappings.get('multi_source', {})
-                agency_fields = self._apply_multi_source_mappings(data_dict, multi_source)
-                result.update(agency_fields)
-                logger.debug(f"Mapped agency fields: {list(agency_fields.keys())}")
-            
-            # Apply direct mappings
-            direct_mappings = field_mappings.get('direct', {})
-            result.update(self._apply_direct_mappings(data_dict, direct_mappings))
-            
-            # Apply multi-source mappings for non-agency entities
-            if entity_type != 'agency':
+                # Generate unique agency ID first
+                agency_key = self._generate_agency_key(data_dict, multi_source)
+                if agency_key:
+                    result['id'] = agency_key
+                    # Apply field mappings
+                    agency_fields = self._apply_multi_source_mappings(data_dict, multi_source)
+                    result.update(agency_fields)
+                    logger.debug(f"Mapped agency fields for {agency_key}: {list(agency_fields.keys())}")
+                else:
+                    return {}
+            else:
+                # Apply regular field mappings for other entities
+                direct_mappings = field_mappings.get('direct', {})
+                result.update(self._apply_direct_mappings(data_dict, direct_mappings))
+                
                 multi_source = field_mappings.get('multi_source', {})
                 result.update(self._apply_multi_source_mappings(data_dict, multi_source))
-            
-            # Apply object mappings
-            object_mappings = field_mappings.get('object', {})
-            result.update(self._apply_object_mappings(data_dict, object_mappings))
-            
+                
+                object_mappings = field_mappings.get('object', {})
+                result.update(self._apply_object_mappings(data_dict, object_mappings))
+                
+                reference_mappings = field_mappings.get('reference', {})
+                result.update(self._apply_reference_mappings(data_dict, reference_mappings))
+
             # Log mapping results
             logger.debug(f"Mapped {len(self._mapped_fields)} fields for {entity_type} entity")
             
