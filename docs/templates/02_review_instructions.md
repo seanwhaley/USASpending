@@ -7,7 +7,26 @@ version: 1.0.0
 
 # Code Review Analysis Instructions
 
-This document provides structured approaches for analyzing code during reviews, with special emphasis on configuration-first principles and root cause analysis.
+## Critical Requirements
+
+### Single File Focus
+- REQUIRED: All review documentation MUST be maintained in a single comprehensive file
+- PROHIBITED: Creating multiple parallel review files
+- REQUIRED: Use progressive documentation in the single file
+- REQUIRED: Complete each section fully before moving to next
+
+### Documentation Standards
+- Every claim requires evidence citation
+- Every metric requires measurement data
+- Every issue requires reproduction steps
+- Every recommendation requires justification
+
+### Review Process
+1. Create single review file using template
+2. Complete each section progressively
+3. Include all evidence and metrics
+4. Update single file as analysis deepens
+5. Maintain complete audit trail
 
 ## Six Thinking Hats Analysis
 
@@ -928,7 +947,7 @@ For each identified issue and recommendation, develop a verification plan:
 
 ### Component Analysis Documentation
 
-For key system components, provide structured analysis:
+For all system components, provide structured analysis:
 
 ```markdown
 ### [Component Name] Analysis
@@ -1148,3 +1167,87 @@ Track these metrics for functional correctness:
 | Bug Recurrence | >10% | >20% | Root cause analysis |
 | Failed Assertions | >5% | >10% | Fix validation |
 | Regression Rate | >1% | >5% | Improve testing |
+
+## Automated Analysis Tools Usage
+
+### Required Tool Execution
+Before beginning any review, you MUST run these automated analysis tools:
+
+1. **Functional Coverage Analysis**
+   - Purpose: Understand test coverage at function level
+   - Tool: `tools/functional_coverage_analyzer.py` 
+   - Output: `functional_coverage_report.json`
+   - Required Data:
+     - Total function count
+     - Tested function count
+     - Coverage percentage
+     - High/Medium priority gaps
+
+2. **Test Gap Analysis**
+   - Purpose: Identify untested critical components
+   - Tool: `tools/test_gap_analyzer.py`
+   - Output: `test_gap_report.json`
+   - Required Data:  
+     - Total gap count
+     - Critical components untested
+     - Priority distribution
+
+3. **Test Quality Analysis**
+   - Purpose: Evaluate test implementation quality
+   - Tool: `tools/test_quality_analyzer.py` 
+   - Output: `test_quality_report.json`
+   - Required Data:
+     - Overall quality score
+     - Improvement areas
+     - Pattern issues
+     - Documentation gaps
+
+### Evidence Integration Requirements
+
+All review documentation MUST:
+1. Reference relevant tool output files
+2. Include timestamps of analysis runs
+3. Compare metrics against established thresholds
+4. Track changes in metrics over time
+5. Link findings to specific source data
+
+### Required Analysis Templates
+
+When documenting automated analysis results:
+
+```markdown
+### Automated Analysis Evidence
+Last Run: [timestamp]
+Tool Status: [Complete/Partial]
+
+| Analysis | Source | Key Metrics | Status |
+|----------|--------|-------------|--------|
+| Coverage | functional_coverage_report.json | • Total: [X]
+• Tested: [Y]
+• Coverage: [Z%] | Complete/Pending |
+| Gaps | test_gap_report.json | • Total: [X]
+• Critical: [Y]
+• High Priority: [Z] | Complete/Pending |
+| Quality | test_quality_report.json | • Score: [X]/100
+• Issues: [Y] | Complete/Pending |
+```
+
+### Metrics Integration Guide
+
+1. **Coverage Metrics**
+   - Link gaps to specific components
+   - Prioritize based on risk and complexity
+   - Track historical coverage trends
+   - Document justifications for gaps
+
+2. **Quality Metrics**
+   - Map quality issues to patterns
+   - Link to specific test files
+   - Track improvement progress
+   - Document refactoring needs
+
+3. **Tool Integration**
+   - Run tools before major reviews
+   - Include in CI/CD pipelines
+   - Track metrics in dashboards
+   - Alert on significant changes

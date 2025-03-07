@@ -1,55 +1,54 @@
-"""Schema adapters for type conversion and validation."""
-from typing import Dict, Any, List, Optional, Union, Type, Callable
-import datetime
-import decimal
+"""Schema adapter implementations for data type conversion."""
+from typing import Dict, Any, List, Optional, Union, Type, TypeVar, Generic, Callable
+from decimal import Decimal, InvalidOperation
+from datetime import datetime, date
 import re
+from dataclasses import dataclass, field
+from abc import ABC, abstractmethod
 
-from . import get_logger, ConfigurationError
+from . import get_logger
 from .interfaces import ISchemaAdapter
 
 logger = get_logger(__name__)
 
-T = TypeVar('T')
-R = TypeVar('R')
-
-class AdapterTransform(Generic[T, R]):
-    """Utility class for transforming data from one type to another."""
+@dataclass
+class AdapterTransform:
+    """Configuration for field transformations."""
+    type: str
+    config: Dict[str, Any] = field(default_factory=dict)
     
-    def __init__(self, transform_func: Callable[[T], R], 
-                 input_type: Type[T] = None, 
-                 output_type: Type[R] = None):
-        """Initialize transform function.
-        
-        Args:
-            transform_func: Function to transform data
-            input_type: Expected input type (optional)
-            output_type: Expected output type (optional)
-        """
-        self.transform_func = transform_func
-        self.input_type = input_type
-        self.output_type = output_type
-    
-    def __call__(self, value: T) -> R:
-        """Apply transformation to value.
-        
-        Args:
-            value: Value to transform
-            
-        Returns:
-            Transformed value
-        """
+    def __call__(self, value: Any) -> Any:
+        """Apply the transformation to a value."""
         if value is None:
             return None
             
-        if self.input_type and not isinstance(value, self.input_type):
-            logger.warning(f"Value {value} is not of expected input type {self.input_type}")
-            
-        result = self.transform_func(value)
+        transforms = {
+            'uppercase': lambda x: x.upper() if isinstance(x, str) else x,
+            'lowercase': lambda x: x.lower() if isinstance(x, str) else x,
+            'trim': lambda x: x.strip() if isinstance(x, str) else x,
+            'strip_characters': lambda x: ''.join(c for c in x if c not in self.config),
+            'pad_left': lambda x: str(x).zfill(self.config.get('length', 5)),
+            'truncate': lambda x: str(x)[:self.config.get('length', 3)],
+            'normalize_whitespace': lambda x: ' '.join(str(x).split()),
+            'split': lambda x: str(x).split(self.config),
+            'get_index': lambda x: x[self.config] if isinstance(x, (list, tuple)) else None,
+            'to_int': lambda x: int(x) if str(x).isdigit() else None,
+            'to_isoformat': lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x)
+        }
         
-        if self.output_type and result is not None and not isinstance(result, self.output_type):
-            logger.warning(f"Result {result} is not of expected output type {self.output_type}")
+        transform_func = transforms.get(self.type)
+        if not transform_func:
+            raise ValueError(f"Unknown transformation type: {self.type}")
             
-        return result
+        try:
+            return transform_func(value)
+        except (ValueError, TypeError, IndexError) as e:
+            logger.warning(f"Transform {self.type} failed for value {value}: {str(e)}")
+            return None
+
+class AdapterError(Exception):
+    """Base class for adapter errors."""
+    pass
 
 class BaseSchemaAdapter(ISchemaAdapter):
     """Base class for schema adapters."""
@@ -58,13 +57,30 @@ class BaseSchemaAdapter(ISchemaAdapter):
         """Initialize adapter."""
         self.errors: List[str] = []
         
-    def get_validation_errors(self) -> List[str]:
-        """Get validation error messages."""
-        return self.errors.copy()
+    def validate(self, value: Any, rules: Dict[str, Any],
+                validation_context: Optional[Dict[str, Any]] = None) -> bool:
+        """Validate a value against schema rules."""
+        return self.validate_field(value)
         
-    def _add_error(self, field_name: str, message: str) -> None:
-        """Add validation error."""
-        self.errors.append(f"{field_name}: {message}")
+    def transform(self, value: Any) -> Any:
+        """Transform a value according to schema rules."""
+        return self.transform_field(value)
+        
+    def get_errors(self) -> List[str]:
+        """Get validation/transformation errors."""
+        return self.errors.copy()
+
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
+        """Validate field value."""
+        raise NotImplementedError
+        
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
+        """Transform field value."""
+        raise NotImplementedError
+        
+    def clear_cache(self) -> None:
+        """Clear any cached data."""
+        self.errors.clear()
 
 class StringAdapter(BaseSchemaAdapter):
     """Adapter for string fields."""
@@ -74,14 +90,14 @@ class StringAdapter(BaseSchemaAdapter):
                  pattern: Optional[str] = None,
                  strip: bool = True):
         """Initialize string adapter."""
-        super().__init__()
+        super().__init__() 
         self.min_length = min_length
         self.max_length = max_length
         self.pattern = pattern
         self.strip = strip
         self._pattern_regex = re.compile(pattern) if pattern else None
         
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
         """Validate string value."""
         self.errors.clear()
         
@@ -89,41 +105,42 @@ class StringAdapter(BaseSchemaAdapter):
             return True
             
         if not isinstance(value, str):
-            self._add_error(field_name, f"Expected string, got {type(value)}")
+            self.errors.append(f"Expected string, got {type(value)}")
             return False
             
         str_value = str(value).strip() if self.strip else str(value)
         
         if self.min_length is not None and len(str_value) < self.min_length:
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"String length {len(str_value)} is less than minimum {self.min_length}"
             )
             return False
             
         if self.max_length is not None and len(str_value) > self.max_length:
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"String length {len(str_value)} exceeds maximum {self.max_length}"
             )
             return False
             
         if self._pattern_regex and not self._pattern_regex.match(str_value):
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"String does not match pattern: {self.pattern}"
             )
             return False
             
         return True
         
-    def transform(self, value: Any, field_name: str) -> Any:
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
         """Transform to string format."""
         if value is None:
             return None
             
         str_value = str(value)
         return str_value.strip() if self.strip else str_value
+        
+    def get_validation_errors(self) -> List[str]:
+        """Get validation error messages."""
+        return self.errors.copy()
 
 class NumericAdapter(BaseSchemaAdapter):
     """Adapter for numeric fields."""
@@ -139,7 +156,7 @@ class NumericAdapter(BaseSchemaAdapter):
         self.precision = precision
         self.decimal = decimal
         
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
         """Validate numeric value."""
         self.errors.clear()
         
@@ -153,17 +170,11 @@ class NumericAdapter(BaseSchemaAdapter):
                 num_value = float(value)
                 
             if self.min_value is not None and num_value < self.min_value:
-                self._add_error(
-                    field_name,
-                    f"Value {num_value} is less than minimum {self.min_value}"
-                )
+                self.errors.append(f"Value {num_value} is less than minimum {self.min_value}")
                 return False
                 
             if self.max_value is not None and num_value > self.max_value:
-                self._add_error(
-                    field_name,
-                    f"Value {num_value} exceeds maximum {self.max_value}"
-                )
+                self.errors.append(f"Value {num_value} exceeds maximum {self.max_value}")
                 return False
                 
             if self.precision is not None and self.decimal:
@@ -171,20 +182,16 @@ class NumericAdapter(BaseSchemaAdapter):
                 if '.' in str_value:
                     decimal_places = len(str_value.split('.')[1])
                     if decimal_places > self.precision:
-                        self._add_error(
-                            field_name,
-                            f"Value has {decimal_places} decimal places, "
-                            f"maximum is {self.precision}"
-                        )
+                        self.errors.append(f"Decimal places {decimal_places} exceeds precision {self.precision}")
                         return False
                         
             return True
             
         except (ValueError, InvalidOperation):
-            self._add_error(field_name, "Invalid numeric value")
+            self.errors.append(f"Invalid numeric value: {value}")
             return False
             
-    def transform(self, value: Any, field_name: str) -> Any:
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
         """Transform to numeric format."""
         if value is None:
             return None
@@ -193,13 +200,16 @@ class NumericAdapter(BaseSchemaAdapter):
             if self.decimal:
                 num_value = Decimal(str(value))
                 if self.precision is not None:
-                    # Round to specified precision
-                    num_value = round(num_value, self.precision)
+                    return round(num_value, self.precision)
                 return num_value
             else:
                 return float(value)
         except (ValueError, InvalidOperation):
             return None
+            
+    def get_validation_errors(self) -> List[str]:
+        """Get validation error messages."""
+        return self.errors.copy()
 
 class DateAdapter(BaseSchemaAdapter):
     """Adapter for date/datetime fields."""
@@ -214,51 +224,53 @@ class DateAdapter(BaseSchemaAdapter):
         self.max_date = max_date
         self.output_format = output_format
         
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
         """Validate date value."""
         self.errors.clear()
         
         if value is None:
             return True
             
-        if isinstance(value, (date, datetime)):
-            date_value = value.date() if isinstance(value, datetime) else value
-        else:
-            try:
+        try:
+            # Handle datetime objects
+            if isinstance(value, datetime):
+                date_value = value.date()
+            elif isinstance(value, date):
+                date_value = value
+            else:
                 date_value = self._parse_date(str(value))
-                if not date_value:
-                    self._add_error(
-                        field_name,
-                        f"Could not parse date from {value} using formats: {self.formats}"
-                    )
-                    return False
-            except ValueError as e:
-                self._add_error(field_name, str(e))
+                
+            if not date_value:
+                self.errors.append(f"Could not parse date from {value} using formats: {self.formats}")
                 return False
                 
-        if self.min_date and date_value < self.min_date:
-            self._add_error(
-                field_name,
-                f"Date {date_value} is before minimum {self.min_date}"
-            )
-            return False
+            if self.min_date and date_value < self.min_date:
+                self.errors.append(
+                    f"Date {date_value} is before minimum {self.min_date}"
+                )
+                return False
+                
+            if self.max_date and date_value > self.max_date:
+                self.errors.append(
+                    f"Date {date_value} is after maximum {self.max_date}"
+                )
+                return False
+                
+            return True
             
-        if self.max_date and date_value > self.max_date:
-            self._add_error(
-                field_name,
-                f"Date {date_value} is after maximum {self.max_date}"
-            )
+        except ValueError as e:
+            self.errors.append(str(e))
             return False
-            
-        return True
         
-    def transform(self, value: Any, field_name: str) -> Any:
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
         """Transform to date format."""
         if value is None:
             return None
             
-        if isinstance(value, (date, datetime)):
-            date_value = value.date() if isinstance(value, datetime) else value
+        if isinstance(value, datetime):
+            date_value = value.date()
+        elif isinstance(value, date):
+            date_value = value
         else:
             date_value = self._parse_date(str(value))
             if not date_value:
@@ -283,7 +295,7 @@ class BooleanAdapter(BaseSchemaAdapter):
     TRUE_VALUES = {'true', 'yes', '1', 'y', 't'}
     FALSE_VALUES = {'false', 'no', '0', 'n', 'f'}
     
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
         """Validate boolean value."""
         self.errors.clear()
         
@@ -295,15 +307,14 @@ class BooleanAdapter(BaseSchemaAdapter):
             
         str_value = str(value).lower()
         if str_value not in self.TRUE_VALUES and str_value not in self.FALSE_VALUES:
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"Invalid boolean value: {value}"
             )
             return False
             
         return True
         
-    def transform(self, value: Any, field_name: str) -> Any:
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
         """Transform to boolean."""
         if value is None:
             return None
@@ -319,40 +330,45 @@ class BooleanAdapter(BaseSchemaAdapter):
         return None
 
 class EnumAdapter(BaseSchemaAdapter):
-    """Adapter for enumerated value fields."""
+    """Adapter for enum fields."""
     
-    def __init__(self, valid_values: List[str],
-                 case_sensitive: bool = False):
+    def __init__(self, field_name: str, enum_class: Type,
+                 required: bool = False, case_sensitive: bool = False):
         """Initialize enum adapter."""
         super().__init__()
-        self.valid_values = valid_values
+        self.field_name = field_name
+        self.enum_class = enum_class
+        self.required = required
         self.case_sensitive = case_sensitive
         
+        # Build lookup sets
+        self._values = {e.value for e in enum_class}
         if not case_sensitive:
-            self.valid_values = [v.lower() for v in valid_values]
+            self._values = {str(v).lower() for v in self._values}
             
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
         """Validate enum value."""
         self.errors.clear()
-        
         if value is None:
+            if self.required:
+                self.errors.append(f"Field '{field_name or self.field_name}' is required")
+                return False
             return True
             
         check_value = str(value)
         if not self.case_sensitive:
             check_value = check_value.lower()
             
-        if check_value not in self.valid_values:
-            self._add_error(
-                field_name,
-                f"Value {value} not in valid values: {self.valid_values}"
+        if check_value not in self._values:
+            self.errors.append(
+                f"Value '{value}' not in valid values: {sorted(self._values)}"
             )
             return False
             
         return True
         
-    def transform(self, value: Any, field_name: str) -> Any:
-        """Transform enum value."""
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
+        """Transform to enum value."""
         if value is None:
             return None
             
@@ -360,8 +376,15 @@ class EnumAdapter(BaseSchemaAdapter):
         if not self.case_sensitive:
             check_value = check_value.lower()
             
-        if check_value in self.valid_values:
-            return value
+        if check_value in self._values:
+            # Find matching enum member
+            for member in self.enum_class:
+                member_value = str(member.value)
+                if not self.case_sensitive:
+                    member_value = member_value.lower()
+                if member_value == check_value:
+                    return member
+                    
         return None
 
 class ListAdapter(BaseSchemaAdapter):
@@ -376,7 +399,7 @@ class ListAdapter(BaseSchemaAdapter):
         self.min_items = min_items
         self.max_items = max_items
         
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
         """Validate list value."""
         self.errors.clear()
         
@@ -384,35 +407,33 @@ class ListAdapter(BaseSchemaAdapter):
             return True
             
         if not isinstance(value, (list, tuple)):
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"Expected list/tuple, got {type(value)}"
             )
             return False
             
         if self.min_items is not None and len(value) < self.min_items:
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"List has {len(value)} items, minimum is {self.min_items}"
             )
             return False
             
         if self.max_items is not None and len(value) > self.max_items:
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"List has {len(value)} items, maximum is {self.max_items}"
             )
             return False
             
         # Validate each item
+        valid = True
         for i, item in enumerate(value):
-            if not self.item_adapter.validate(item, f"{field_name}[{i}]"):
-                self.errors.extend(self.item_adapter.get_validation_errors())
-                return False
+            if not self.item_adapter.validate_field(item, f"{field_name}[{i}]"):
+                valid = False
+                self.errors.extend(self.item_adapter.get_errors())
                 
-        return True
+        return valid
         
-    def transform(self, value: Any, field_name: str) -> Any:
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
         """Transform list value."""
         if value is None:
             return None
@@ -421,7 +442,7 @@ class ListAdapter(BaseSchemaAdapter):
             return None
             
         return [
-            self.item_adapter.transform(item, f"{field_name}[{i}]")
+            self.item_adapter.transform_field(item, f"{field_name}[{i}]")
             for i, item in enumerate(value)
         ]
 
@@ -437,7 +458,7 @@ class DictAdapter(BaseSchemaAdapter):
         self.required_fields = required_fields or []
         self.additional_fields = additional_fields
         
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
         """Validate dictionary value."""
         self.errors.clear()
         
@@ -445,8 +466,7 @@ class DictAdapter(BaseSchemaAdapter):
             return True
             
         if not isinstance(value, dict):
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"Expected dictionary, got {type(value)}"
             )
             return False
@@ -457,8 +477,7 @@ class DictAdapter(BaseSchemaAdapter):
             if f not in value
         ]
         if missing_fields:
-            self._add_error(
-                field_name,
+            self.errors.append(
                 f"Missing required fields: {missing_fields}"
             )
             return False
@@ -470,22 +489,22 @@ class DictAdapter(BaseSchemaAdapter):
                 if f not in self.field_adapters
             ]
             if extra_fields:
-                self._add_error(
-                    field_name,
+                self.errors.append(
                     f"Unknown fields not allowed: {extra_fields}"
                 )
                 return False
                 
         # Validate each field
+        valid = True
         for f_name, adapter in self.field_adapters.items():
             if f_name in value:
-                if not adapter.validate(value[f_name], f"{field_name}.{f_name}"):
-                    self.errors.extend(adapter.get_validation_errors())
-                    return False
+                if not adapter.validate_field(value[f_name], f"{field_name}.{f_name}"):
+                    valid = False
+                    self.errors.extend(adapter.get_errors())
                     
-        return True
+        return valid
         
-    def transform(self, value: Any, field_name: str) -> Any:
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
         """Transform dictionary value."""
         if value is None:
             return None
@@ -496,7 +515,7 @@ class DictAdapter(BaseSchemaAdapter):
         result = {}
         for f_name, adapter in self.field_adapters.items():
             if f_name in value:
-                transformed = adapter.transform(
+                transformed = adapter.transform_field(
                     value[f_name],
                     f"{field_name}.{f_name}"
                 )
@@ -514,54 +533,75 @@ class DictAdapter(BaseSchemaAdapter):
 class CompositeFieldAdapter(BaseSchemaAdapter):
     """Adapter that chains multiple transformations together."""
     
-    def __init__(self, transformations: List[AdapterTransform]):
-        """Initialize composite adapter.
-        
-        Args:
-            transformations: List of transformations to apply in sequence
-        """
+    def __init__(self, field_name: str, transformations: List[Any],
+                required: bool = False):
+        """Initialize composite adapter."""
         super().__init__()
+        self.field_name = field_name
         self.transformations = transformations
+        self.required = required
         
-    def validate(self, value: Any, field_name: str) -> bool:
-        """Validate by running through transformations.
-        
-        Args:
-            value: Value to validate
-            field_name: Field name for error messages
-            
-        Returns:
-            True if all transformations succeed, False otherwise
-        """
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
+        """Validate by running through transformations."""
         self.errors.clear()
+        
+        if value is None:
+            if self.required:
+                self.errors.append(f"Field '{field_name or self.field_name}' is required")
+                return False
+            return True
+            
+        # First validate using any adapter transformations
+        for transform in self.transformations:
+            # If the transform is a transform_field method from an adapter
+            if hasattr(transform, '__self__') and isinstance(transform.__self__, BaseSchemaAdapter):
+                adapter = transform.__self__
+                if not adapter.validate_field(value, field_name):
+                    self.errors.extend(adapter.get_errors())
+                    return False
+            # If the transform is an adapter instance
+            elif isinstance(transform, BaseSchemaAdapter):
+                if not transform.validate_field(value, field_name):
+                    self.errors.extend(transform.get_errors())
+                    return False
+            
+        # Then try the transformation chain
         try:
             result = value
             for transform in self.transformations:
-                result = transform(result)
+                if hasattr(transform, 'transform_field'):
+                    result = transform.transform_field(result)
+                else:
+                    result = transform(result)
                 if result is None:
-                    self._add_error(field_name, f"Transformation {transform.__class__.__name__} failed")
+                    self.errors.append(
+                        f"Transformation {getattr(transform, '__name__', str(transform))} failed for value {value}"
+                    )
                     return False
+                    
             return True
+            
         except Exception as e:
-            self._add_error(field_name, str(e))
+            self.errors.append(str(e))
             return False
             
-    def transform(self, value: Any, field_name: str) -> Any:
-        """Apply transformations in sequence.
-        
-        Args:
-            value: Value to transform
-            field_name: Field name (used for error messages)
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
+        """Apply transformations in sequence."""
+        if value is None:
+            return None
             
-        Returns:
-            Result of applying all transformations in sequence
-        """
-        result = value
-        for transform in self.transformations:
-            result = transform(result)
-            if result is None:
-                return None
-        return result
+        try:
+            result = value
+            for transform in self.transformations:
+                if hasattr(transform, 'transform_field'):
+                    result = transform.transform_field(result)
+                else:
+                    result = transform(result)
+                if result is None:
+                    return None
+            return result
+        except Exception:
+            return None
 
 class SchemaAdapterFactory:
     """Factory class for creating schema adapters."""
@@ -659,7 +699,7 @@ class PydanticAdapter(FieldAdapter):
             return errors
             
         try:
-            self.model_class.parse_obj(data[self.field_name])
+            self.model_class.model_validate(data[self.field_name])
         except Exception as e:
             errors.append(f"Field '{self.field_name}' validation error: {str(e)}")
             
@@ -678,8 +718,8 @@ class PydanticAdapter(FieldAdapter):
             return None
             
         try:
-            model = self.model_class.parse_obj(data[self.field_name])
-            return model.dict()
+            model = self.model_class.model_validate(data[self.field_name])
+            return model.model_dump()
         except Exception:
             return None
 
@@ -740,194 +780,139 @@ class MarshmallowAdapter(FieldAdapter):
         except Exception:
             return None
 
-class DateFieldAdapter(FieldAdapter):
+class DateFieldAdapter(BaseSchemaAdapter):
     """Adapter for date fields."""
     
     def __init__(self, field_name: str, formats: List[str], 
                  required: bool = False, min_date: Optional[date] = None,
                  max_date: Optional[date] = None):
-        """Initialize date field adapter.
-        
-        Args:
-            field_name: Name of the field
-            formats: List of date format strings
-            required: Whether the field is required
-            min_date: Minimum allowed date
-            max_date: Maximum allowed date
-        """
-        super().__init__(field_name, required)
+        """Initialize date field adapter."""
+        super().__init__()
+        self.field_name = field_name
         self.formats = formats
+        self.required = required
         self.min_date = min_date
         self.max_date = max_date
         
-    def validate(self, data: Dict[str, Any]) -> List[str]:
-        """Validate date field.
-        
-        Args:
-            data: Dictionary containing field data
-            
-        Returns:
-            List of validation error messages
-        """
-        errors = super().validate(data)
-        
-        if errors or self.field_name not in data:
-            return errors
-            
-        value = data[self.field_name]
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
+        """Validate date field."""
+        self.errors.clear()
         if value is None:
-            return errors
-            
-        date_value = None
+            if self.required:
+                self.errors.append(f"Field '{field_name or self.field_name}' is required")
+                return False
+            return True
         
-        if isinstance(value, (date, datetime)):
-            date_value = value.date() if isinstance(value, datetime) else value
-        else:
-            # Try to parse using provided formats
-            for fmt in self.formats:
-                try:
-                    date_value = datetime.strptime(str(value), fmt).date()
-                    break
-                except ValueError:
-                    continue
-                    
-            if date_value is None:
-                errors.append(
-                    f"Field '{self.field_name}': Could not parse date '{value}'"
+        try:
+            date_val = self._parse_date(str(value))
+            if not date_val:
+                self.errors.append(
+                    f"Could not parse date '{value}' using formats: {self.formats}"
                 )
-                return errors
+                return False
                 
-        if self.min_date and date_value < self.min_date:
-            errors.append(
-                f"Field '{self.field_name}': Date {date_value} is before minimum {self.min_date}"
-            )
+            if self.min_date and date_val < self.min_date:
+                self.errors.append(
+                    f"Date {date_val} is before minimum {self.min_date}"
+                )
+                return False
+                
+            if self.max_date and date_val > self.max_date:
+                self.errors.append(
+                    f"Date {date_val} is after maximum {self.max_date}"
+                )
+                return False
+                
+            return True
             
-        if self.max_date and date_value > self.max_date:
-            errors.append(
-                f"Field '{self.field_name}': Date {date_value} is after maximum {self.max_date}"
-            )
+        except (ValueError, TypeError) as e:
+            self.errors.append(str(e))
+            return False
             
-        return errors
-        
-    def transform(self, data: Dict[str, Any]) -> Any:
-        """Transform date field value.
-        
-        Args:
-            data: Dictionary containing field data
-            
-        Returns:
-            Date object or None if invalid
-        """
-        if self.field_name not in data:
-            return None
-            
-        value = data[self.field_name]
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
+        """Transform to date format."""
         if value is None:
             return None
             
-        if isinstance(value, (date, datetime)):
-            return value.date() if isinstance(value, datetime) else value
+        try:
+            return self._parse_date(str(value))
+        except (ValueError, TypeError):
+            return None
             
-        # Try to parse using provided formats
+    def _parse_date(self, value: str) -> Optional[date]:
+        """Parse date string using configured formats."""
         for fmt in self.formats:
             try:
-                return datetime.strptime(str(value), fmt).date()
+                return datetime.strptime(value, fmt).date()
             except ValueError:
                 continue
-                
         return None
 
-class DecimalFieldAdapter(FieldAdapter):
+class DecimalFieldAdapter(BaseSchemaAdapter):
     """Adapter for decimal fields."""
     
     def __init__(self, field_name: str, required: bool = False,
                  min_value: Optional[Decimal] = None,
                  max_value: Optional[Decimal] = None,
                  precision: Optional[int] = None):
-        """Initialize decimal field adapter.
-        
-        Args:
-            field_name: Name of the field
-            required: Whether the field is required
-            min_value: Minimum allowed value
-            max_value: Maximum allowed value
-            precision: Decimal precision
-        """
-        super().__init__(field_name, required)
+        """Initialize decimal field adapter."""
+        super().__init__()
+        self.field_name = field_name
+        self.required = required
         self.min_value = min_value
         self.max_value = max_value
         self.precision = precision
         
-    def validate(self, data: Dict[str, Any]) -> List[str]:
-        """Validate decimal field.
-        
-        Args:
-            data: Dictionary containing field data
-            
-        Returns:
-            List of validation error messages
-        """
-        errors = super().validate(data)
-        
-        if errors or self.field_name not in data:
-            return errors
-            
-        value = data[self.field_name]
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
+        """Validate decimal field."""
+        self.errors.clear()
         if value is None:
-            return errors
+            if self.required:
+                self.errors.append(f"Field '{field_name or self.field_name}' is required")
+                return False
+            return True
             
         try:
             decimal_value = Decimal(str(value))
             
             if self.min_value is not None and decimal_value < self.min_value:
-                errors.append(
-                    f"Field '{self.field_name}': Value {decimal_value} is less than minimum {self.min_value}"
+                self.errors.append(
+                    f"Value {decimal_value} is less than minimum {self.min_value}"
                 )
+                return False
                 
             if self.max_value is not None and decimal_value > self.max_value:
-                errors.append(
-                    f"Field '{self.field_name}': Value {decimal_value} exceeds maximum {self.max_value}"
+                self.errors.append(
+                    f"Value {decimal_value} exceeds maximum {self.max_value}"
                 )
+                return False
                 
             if self.precision is not None:
-                # Check precision
                 str_value = str(decimal_value)
                 if '.' in str_value:
                     decimal_places = len(str_value.split('.')[1])
                     if decimal_places > self.precision:
-                        errors.append(
-                            f"Field '{self.field_name}': Value has {decimal_places} decimal places, "
+                        self.errors.append(
+                            f"Value has {decimal_places} decimal places, "
                             f"maximum is {self.precision}"
                         )
-                
-        except (ValueError, InvalidOperation):
-            errors.append(f"Field '{self.field_name}': Invalid decimal value '{value}'")
+                        return False
+                        
+            return True
             
-        return errors
-        
-    def transform(self, data: Dict[str, Any]) -> Any:
-        """Transform decimal field value.
-        
-        Args:
-            data: Dictionary containing field data
+        except (ValueError, InvalidOperation) as e:
+            self.errors.append(str(e))
+            return False
             
-        Returns:
-            Decimal object or None if invalid
-        """
-        if self.field_name not in data:
-            return None
-            
-        value = data[self.field_name]
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
+        """Transform to decimal format."""
         if value is None:
             return None
             
         try:
             decimal_value = Decimal(str(value))
-            
             if self.precision is not None:
-                # Round to specified precision
                 decimal_value = round(decimal_value, self.precision)
-                
             return decimal_value
         except (ValueError, InvalidOperation):
             return None
@@ -947,6 +932,5 @@ __all__ = [
     'EnumAdapter',
     'ListAdapter',
     'DictAdapter',
-    'AdapterTransform',  # Add this to __all__
-    'CompositeFieldAdapter'  # Add this to __all__
+    'CompositeFieldAdapter'
 ]

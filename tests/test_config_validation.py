@@ -1,11 +1,16 @@
-"""Tests for configuration validation system."""
-import pytest
+"""Tests for configuration validation functionality."""
 from pathlib import Path
+import pytest
+
+from usaspending.config_schema import ROOT_CONFIG_SCHEMA
+from usaspending.config_validation import validate_configuration
+from usaspending.exceptions import ConfigurationError
+
 import yaml
-import json
-from src.usaspending.config_validation import validate_configuration, ValidationError
-from src.usaspending.config_schemas import ROOT_CONFIG_SCHEMA, CORE_SCHEMA
-from src.usaspending.exceptions import ConfigurationError
+import tempfile
+
+from usaspending.config_validation import ValidationError
+from usaspending.config_schema import CORE_SCHEMA
 
 @pytest.fixture
 def create_temp_config(tmp_path):

@@ -10,7 +10,7 @@ from .logging_config import get_logger
 logger = get_logger(__name__)
 
 @dataclass
-class Dependency:
+class FieldDependency:
     """Represents a field dependency."""
     field_name: str
     target_field: str
@@ -23,14 +23,14 @@ class DependencyManager(IDependencyManager):
     
     def __init__(self):
         """Initialize dependency manager."""
-        self.dependencies: Dict[str, List[Dependency]] = defaultdict(list)
+        self.dependencies: Dict[str, List[FieldDependency]] = defaultdict(list)
         self.validation_order: Optional[List[str]] = None
         self.validation_graph: Optional[nx.DiGraph] = None
         
     def add_dependency(self, field_name: str, target_field: str,
                       dependency_type: str, validation_rule: Dict[str, Any]) -> None:
         """Add field dependency."""
-        dependency = Dependency(
+        dependency = FieldDependency(
             field_name=field_name,
             target_field=target_field,
             dependency_type=dependency_type,
@@ -83,7 +83,7 @@ class DependencyManager(IDependencyManager):
             
         return errors
         
-    def _validate_dependency(self, dependency: Dependency,
+    def _validate_dependency(self, dependency: FieldDependency,
                            field_value: Any,
                            validated_fields: Dict[str, Any],
                            adapters: Dict[str, ISchemaAdapter]) -> bool:
@@ -178,7 +178,7 @@ class DependencyManager(IDependencyManager):
             self.validation_order = sorted(fields)
             self.validation_graph = graph
             
-    def get_field_dependencies(self, field_name: str) -> List[Dependency]:
+    def get_field_dependencies(self, field_name: str) -> List[FieldDependency]:
         """Get dependencies for a field."""
         return self.dependencies.get(field_name, []).copy()
         
@@ -265,3 +265,12 @@ class DependencyManager(IDependencyManager):
 
 # Default implementation alias
 FieldDependencies = DependencyManager  # Use DependencyManager as the default implementation
+
+# Add alias for backward compatibility
+FieldDependencyManager = DependencyManager
+
+__all__ = [
+    'DependencyManager',
+    'FieldDependencyManager',  # Add alias to __all__
+    'FieldDependency'
+]

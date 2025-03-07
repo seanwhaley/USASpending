@@ -721,12 +721,16 @@ def atomic_replace(source: str, target: str) -> None:
     if not os.path.exists(source):
         raise FileNotFoundError(f"Source file not found: {source}")
         
+    # Initialize backup_path to None
+    backup_path = None
+        
     # Create backup of target if it exists
     if os.path.exists(target):
         try:
             backup_path = backup_file(target)
         except FileOperationError:
-            backup_path = None
+            # If backup fails, log but continue
+            logger.warning(f"Failed to create backup of {target}")
             
     try:
         # Perform atomic replace
@@ -740,12 +744,12 @@ def atomic_replace(source: str, target: str) -> None:
             # Unix - use rename (atomic on Unix)
             os.rename(source, target)
             
-        # Remove backup on success
-        if backup_path:
+        # Remove backup on success if it exists
+        if backup_path and os.path.exists(backup_path):
             safe_delete(backup_path)
             
     except OSError as e:
-        # Restore from backup on failure
+        # Restore from backup on failure if it exists
         if backup_path and os.path.exists(backup_path):
             try:
                 os.rename(backup_path, target)

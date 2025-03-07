@@ -102,6 +102,163 @@ TEST_CONFIG = {
     }
 }
 
+# New comprehensive test configuration for current EntityMapper implementation
+UPDATED_TEST_CONFIG = {
+    "entities": {
+        "contract": {
+            "entity_processing": {
+                "processing_order": 1
+            },
+            "key_fields": ["contract_id"],
+            "field_mappings": {
+                "direct": {
+                    "id": "contract_id",
+                    "contract_number": "piid",
+                    "description": "description_of_requirement",
+                    "award_amount": {"field": "potential_total_value_of_award"}
+                },
+                "multi_source": {
+                    "period_of_performance": {
+                        "sources": ["period_of_performance_start_date", "period_of_performance_end_date"],
+                        "strategy": "first_non_empty"
+                    }
+                },
+                "object": {
+                    "place_of_performance": {
+                        "type": "object",
+                        "fields": {
+                            "city": "place_of_performance_city_name",
+                            "state": "place_of_performance_state_code",
+                            "country": "place_of_performance_country_code"
+                        }
+                    }
+                },
+                "reference": {
+                    "awarding_agency": {
+                        "type": "entity_reference",
+                        "entity": "agency",
+                        "key_field": "awarding_agency_code"
+                    },
+                    "funding_agency": {
+                        "type": "entity_reference",
+                        "entity": "agency",
+                        "key_fields": ["funding_agency_code", "funding_sub_agency_code"],
+                        "key_prefix": "agency"
+                    }
+                }
+            }
+        },
+        "agency": {
+            "entity_processing": {
+                "processing_order": 2
+            },
+            "key_fields": ["agency_key"],
+            "field_mappings": {
+                "multi_source": {
+                    "agency_code": {
+                        "sources": ["awarding_agency_code", "funding_agency_code"],
+                        "strategy": "first_non_empty"
+                    },
+                    "sub_agency_code": {
+                        "sources": ["awarding_sub_agency_code", "funding_sub_agency_code"],
+                        "strategy": "first_non_empty"
+                    },
+                    "office_code": {
+                        "sources": ["awarding_office_code", "funding_office_code"],
+                        "strategy": "first_non_empty"
+                    },
+                    "agency_name": {
+                        "sources": ["awarding_agency_name", "funding_agency_name"],
+                        "strategy": "first_non_empty"
+                    }
+                }
+            }
+        },
+        "vendor": {
+            "entity_processing": {
+                "processing_order": 3
+            },
+            "key_fields": ["vendor_duns"],
+            "field_mappings": {
+                "direct": {
+                    "id": "vendor_duns",
+                    "name": "vendor_name",
+                    "location": "vendor_location"
+                }
+            }
+        }
+    },
+    "field_properties": {
+        "id_fields": {
+            "fields": ["contract_id", "piid", "vendor_duns", "*_id"],
+            "validation": {
+                "type": "string",
+                "pattern": "[A-Za-z0-9]+",
+                "max_length": 50
+            }
+        },
+        "code_fields": {
+            "fields": ["*_code"],
+            "validation": {
+                "type": "string",
+                "max_length": 20
+            }
+        },
+        "monetary_fields": {
+            "fields": ["*_amount", "*_value*"],
+            "validation": {
+                "type": "decimal",
+                "min_value": 0
+            }
+        },
+        "boolean_fields": {
+            "fields": ["is_*", "has_*"],
+            "validation": {
+                "type": "boolean",
+                "true_values": ["yes", "y", "true", "t", "1"],
+                "false_values": ["no", "n", "false", "f", "0"]
+            }
+        }
+    }
+}
+
+@pytest.fixture
+def enhanced_entity_mapper():
+    """Create an EntityMapper instance with comprehensive config for testing."""
+    return EntityMapper(UPDATED_TEST_CONFIG)
+
+@pytest.fixture
+def contract_data():
+    """Sample contract data for testing entity mapping."""
+    return {
+        "contract_id": "CONT12345",
+        "piid": "PIID-98765",
+        "description_of_requirement": "Test contract for mapping",
+        "potential_total_value_of_award": "500000.00",
+        "period_of_performance_start_date": "2025-01-01",
+        "period_of_performance_end_date": "2025-12-31",
+        "place_of_performance_city_name": "Washington",
+        "place_of_performance_state_code": "DC",
+        "place_of_performance_country_code": "USA",
+        "awarding_agency_code": "AG01",
+        "awarding_sub_agency_code": "SA01",
+        "awarding_office_code": "OFC01",
+        "awarding_agency_name": "Department of Testing",
+        "vendor_duns": "123456789",
+        "vendor_name": "Test Vendor Inc.",
+        "vendor_location": "Test City, TS"
+    }
+
+@pytest.fixture
+def agency_data():
+    """Sample agency data for testing entity mapping."""
+    return {
+        "awarding_agency_code": "AG01",
+        "awarding_sub_agency_code": "SA01",
+        "awarding_office_code": "OFC01",
+        "awarding_agency_name": "Department of Testing"
+    }
+
 @pytest.fixture
 def entity_mapper(monkeypatch):
     """Create an EntityMapper instance for testing."""
@@ -439,3 +596,272 @@ def test_adapter_error_handling(entity_mapper, mock_adapter):
     errors = entity_mapper.get_mapping_errors()
     assert len(errors) == 1
     assert 'Validation error' in errors[0]
+
+def test_determine_entity_type(enhanced_entity_mapper, contract_data, agency_data):
+    """Test entity type determination based on key fields."""
+    # Contract data should be identified as a contract entity
+    entity_type = enhanced_entity_mapper._determine_entity_type(contract_data)
+    assert entity_type == "contract"
+    
+    # Agency data should be identified as an agency entity
+    entity_type = enhanced_entity_mapper._determine_entity_type(agency_data)
+    assert entity_type == "agency"
+    
+    # Data with no matching key fields should return None
+    invalid_data = {"some_field": "value"}
+    entity_type = enhanced_entity_mapper._determine_entity_type(invalid_data)
+    assert entity_type is None
+
+def test_ensure_dict_data(enhanced_entity_mapper):
+    """Test conversion of different data types to dictionary."""
+    # Test with dictionary
+    dict_data = {"key": "value"}
+    result = enhanced_entity_mapper._ensure_dict_data(dict_data)
+    assert result == dict_data
+    
+    # Test with namedtuple-like object (using mock)
+    mock_namedtuple = Mock()
+    mock_namedtuple._asdict.return_value = {"field1": "value1"}
+    result = enhanced_entity_mapper._ensure_dict_data(mock_namedtuple)
+    assert result == {"field1": "value1"}
+    
+    # Test with object that has items method
+    mock_items_obj = Mock()
+    mock_items_obj.items.return_value = [("field2", "value2")]
+    result = enhanced_entity_mapper._ensure_dict_data(mock_items_obj)
+    assert result == {"field2": "value2"}
+    
+    # Test with list of tuples
+    list_data = [("field3", "value3"), ("field4", "value4")]
+    result = enhanced_entity_mapper._ensure_dict_data(list_data)
+    assert result == {"field3": "value3", "field4": "value4"}
+    
+    # Test with non-convertible type
+    result = enhanced_entity_mapper._ensure_dict_data("string")
+    assert result == {}
+
+def test_apply_direct_mappings(enhanced_entity_mapper, contract_data):
+    """Test direct field mappings."""
+    direct_mappings = UPDATED_TEST_CONFIG["entities"]["contract"]["field_mappings"]["direct"]
+    result = enhanced_entity_mapper._apply_direct_mappings(contract_data, direct_mappings)
+    
+    assert result["id"] == "CONT12345"
+    assert result["contract_number"] == "PIID-98765"
+    assert result["description"] == "Test contract for mapping"
+    assert result["award_amount"] == "500000.00"
+
+def test_apply_multi_source_mappings(enhanced_entity_mapper, contract_data):
+    """Test multi-source field mappings."""
+    multi_source = UPDATED_TEST_CONFIG["entities"]["contract"]["field_mappings"]["multi_source"]
+    result = enhanced_entity_mapper._apply_multi_source_mappings(contract_data, multi_source)
+    
+    assert result["period_of_performance"] == "2025-01-01"
+    
+    # Test with first source missing
+    modified_data = contract_data.copy()
+    del modified_data["period_of_performance_start_date"]
+    result = enhanced_entity_mapper._apply_multi_source_mappings(modified_data, multi_source)
+    assert result["period_of_performance"] == "2025-12-31"
+    
+    # Test with all sources missing
+    modified_data = contract_data.copy()
+    del modified_data["period_of_performance_start_date"]
+    del modified_data["period_of_performance_end_date"]
+    result = enhanced_entity_mapper._apply_multi_source_mappings(modified_data, multi_source)
+    assert "period_of_performance" not in result
+
+def test_apply_object_mappings(enhanced_entity_mapper, contract_data):
+    """Test object field mappings."""
+    object_mappings = UPDATED_TEST_CONFIG["entities"]["contract"]["field_mappings"]["object"]
+    result = enhanced_entity_mapper._apply_object_mappings(contract_data, object_mappings)
+    
+    assert "place_of_performance" in result
+    assert result["place_of_performance"]["city"] == "Washington"
+    assert result["place_of_performance"]["state"] == "DC"
+    assert result["place_of_performance"]["country"] == "USA"
+    
+    # Test with missing fields
+    modified_data = contract_data.copy()
+    del modified_data["place_of_performance_city_name"]
+    result = enhanced_entity_mapper._apply_object_mappings(modified_data, object_mappings)
+    assert "city" not in result["place_of_performance"]
+    assert result["place_of_performance"]["state"] == "DC"
+
+def test_apply_reference_mappings(enhanced_entity_mapper, contract_data):
+    """Test reference field mappings."""
+    reference_mappings = UPDATED_TEST_CONFIG["entities"]["contract"]["field_mappings"]["reference"]
+    result = enhanced_entity_mapper._apply_reference_mappings(contract_data, reference_mappings)
+    
+    # Test single key field reference
+    assert "awarding_agency" in result
+    assert result["awarding_agency"]["entity_type"] == "agency"
+    assert result["awarding_agency"]["data"]["id"] == "AG01"
+    
+    # Test composite key fields reference
+    assert "funding_agency" in result
+    assert result["funding_agency"]["entity_type"] == "agency"
+    assert "agency_code" in result["funding_agency"]["data"] or "funding_agency_code" in result["funding_agency"]["data"]
+
+def test_generate_agency_key(enhanced_entity_mapper, agency_data):
+    """Test agency key generation."""
+    multi_source = UPDATED_TEST_CONFIG["entities"]["agency"]["field_mappings"]["multi_source"]
+    key = enhanced_entity_mapper._generate_agency_key(agency_data, multi_source)
+    
+    # Expected format: agency_code:sub_agency_code:office_code
+    assert key == "AG01:SA01:OFC01"
+    
+    # Test with missing sub-agency
+    modified_data = agency_data.copy()
+    del modified_data["awarding_sub_agency_code"]
+    key = enhanced_entity_mapper._generate_agency_key(modified_data, multi_source)
+    assert key == "AG01:OFC01"
+    
+    # Test with missing office
+    modified_data = agency_data.copy()
+    del modified_data["awarding_office_code"]
+    key = enhanced_entity_mapper._generate_agency_key(modified_data, multi_source)
+    assert key == "AG01:SA01"
+    
+    # Test with only agency code
+    minimal_data = {"awarding_agency_code": "AG01"}
+    key = enhanced_entity_mapper._generate_agency_key(minimal_data, multi_source)
+    assert key == "AG01"
+    
+    # Test with missing agency code (should return None)
+    invalid_data = {"awarding_sub_agency_code": "SA01", "awarding_office_code": "OFC01"}
+    key = enhanced_entity_mapper._generate_agency_key(invalid_data, multi_source)
+    assert key is None
+
+def test_check_key_fields(enhanced_entity_mapper, contract_data, agency_data):
+    """Test key field checking."""
+    # Contract should have its key fields
+    assert enhanced_entity_mapper._check_key_fields(contract_data, "contract") is True
+    
+    # Agency should have its key fields (through multi-source)
+    assert enhanced_entity_mapper._check_key_fields(agency_data, "agency") is True
+    
+    # Missing key fields should return False
+    invalid_data = {"some_field": "value"}
+    assert enhanced_entity_mapper._check_key_fields(invalid_data, "contract") is False
+    assert enhanced_entity_mapper._check_key_fields(invalid_data, "agency") is False
+
+def test_validate_field_value(enhanced_entity_mapper):
+    """Test field value validation using field properties."""
+    # ID field validation
+    assert enhanced_entity_mapper._validate_field_value("contract_id", "ABC123") is True
+    assert enhanced_entity_mapper._validate_field_value("contract_id", "A"*60) is False  # Exceeds max_length
+    
+    # Code field validation
+    assert enhanced_entity_mapper._validate_field_value("agency_code", "CODE123") is True
+    assert enhanced_entity_mapper._validate_field_value("some_code", "A"*30) is False  # Exceeds max_length
+    
+    # Monetary field validation
+    assert enhanced_entity_mapper._validate_field_value("award_amount", "100.50") is True
+    assert enhanced_entity_mapper._validate_field_value("contract_value", "100.50") is True
+    assert enhanced_entity_mapper._validate_field_value("award_amount", "-50.00") is False  # Below min_value
+    
+    # Boolean field validation
+    assert enhanced_entity_mapper._validate_field_value("is_active", "yes") is True
+    assert enhanced_entity_mapper._validate_field_value("has_modifications", "no") is True
+    assert enhanced_entity_mapper._validate_field_value("is_completed", "invalid") is False
+
+def test_apply_validation_rules(enhanced_entity_mapper):
+    """Test application of validation rules."""
+    # String validation
+    string_rules = {"type": "string", "pattern": "[A-Za-z0-9]+", "max_length": 10}
+    assert enhanced_entity_mapper._apply_validation_rules("ABC123", string_rules) is True
+    assert enhanced_entity_mapper._apply_validation_rules("ABC-123", string_rules) is False  # Invalid pattern
+    assert enhanced_entity_mapper._apply_validation_rules("A"*20, string_rules) is False  # Exceeds max_length
+    
+    # Integer validation
+    int_rules = {"type": "integer", "min_value": 0, "max_value": 100}
+    assert enhanced_entity_mapper._apply_validation_rules("50", int_rules) is True
+    assert enhanced_entity_mapper._apply_validation_rules("-10", int_rules) is False  # Below min_value
+    assert enhanced_entity_mapper._apply_validation_rules("200", int_rules) is False  # Above max_value
+    assert enhanced_entity_mapper._apply_validation_rules("abc", int_rules) is False  # Not an integer
+    
+    # Decimal validation
+    decimal_rules = {"type": "decimal", "min_value": 0.0, "max_value": 100.0}
+    assert enhanced_entity_mapper._apply_validation_rules("50.25", decimal_rules) is True
+    assert enhanced_entity_mapper._apply_validation_rules("-10.5", decimal_rules) is False  # Below min_value
+    assert enhanced_entity_mapper._apply_validation_rules("200.5", decimal_rules) is False  # Above max_value
+    assert enhanced_entity_mapper._apply_validation_rules("abc", decimal_rules) is False  # Not a decimal
+    
+    # Enum validation
+    enum_rules = {"type": "enum", "values": ["OPEN", "CLOSED", "PENDING"]}
+    assert enhanced_entity_mapper._apply_validation_rules("OPEN", enum_rules) is True
+    assert enhanced_entity_mapper._apply_validation_rules("open", enum_rules) is True  # Case insensitive
+    assert enhanced_entity_mapper._apply_validation_rules("INVALID", enum_rules) is False  # Not in values
+    
+    # Boolean validation
+    bool_rules = {"type": "boolean", "true_values": ["yes", "true"], "false_values": ["no", "false"]}
+    assert enhanced_entity_mapper._apply_validation_rules("yes", bool_rules) is True
+    assert enhanced_entity_mapper._apply_validation_rules("YES", bool_rules) is True  # Case insensitive
+    assert enhanced_entity_mapper._apply_validation_rules("invalid", bool_rules) is False  # Not in values
+
+def test_full_entity_mapping_contract(enhanced_entity_mapper, contract_data):
+    """Test full entity mapping for contract entity type."""
+    result = enhanced_entity_mapper.map_entity(contract_data)
+    
+    assert result["entity_type"] == "contract"
+    assert result["id"] == "CONT12345"
+    assert result["contract_number"] == "PIID-98765"
+    assert result["description"] == "Test contract for mapping"
+    assert result["award_amount"] == "500000.00"
+    assert result["period_of_performance"] == "2025-01-01"
+    assert result["place_of_performance"]["city"] == "Washington"
+    assert result["place_of_performance"]["state"] == "DC"
+    assert result["place_of_performance"]["country"] == "USA"
+    assert result["awarding_agency"]["entity_type"] == "agency"
+    assert result["awarding_agency"]["data"]["id"] == "AG01"
+
+def test_full_entity_mapping_agency(enhanced_entity_mapper, agency_data):
+    """Test full entity mapping for agency entity type."""
+    result = enhanced_entity_mapper.map_entity(agency_data)
+    
+    assert result["entity_type"] == "agency"
+    assert result["id"] == "AG01:SA01:OFC01"
+    assert result["agency_code"] == "AG01"
+    assert result["sub_agency_code"] == "SA01"
+    assert result["office_code"] == "OFC01"
+    assert result["agency_name"] == "Department of Testing"
+
+def test_full_entity_mapping_error_handling(enhanced_entity_mapper):
+    """Test error handling during entity mapping."""
+    # Test with completely invalid data
+    invalid_data = {"some_field": "value"}
+    result = enhanced_entity_mapper.map_entity(invalid_data)
+    assert result == {}
+    
+    # Test with exception in mapping process
+    with patch.object(enhanced_entity_mapper, '_determine_entity_type', side_effect=Exception("Test error")):
+        with pytest.raises(EntityMappingError):
+            enhanced_entity_mapper.map_entity({"field": "value"})
+
+def test_mapping_stats(enhanced_entity_mapper, contract_data):
+    """Test mapping statistics collection."""
+    enhanced_entity_mapper.map_entity(contract_data)
+    stats = enhanced_entity_mapper.get_mapping_stats()
+    
+    assert stats["mapped_fields"] > 0
+    assert "mapped_fields" in stats
+
+def test_error_handling(enhanced_entity_mapper):
+    """Test error handling and collection."""
+    # Force validation error
+    with patch.object(enhanced_entity_mapper, '_validate_field_value', return_value=False):
+        enhanced_entity_mapper.map_entity({"contract_id": "CONT12345"})
+        
+    errors = enhanced_entity_mapper.get_mapping_errors()
+    assert len(errors) > 0
+
+def test_clear_caches_method(enhanced_entity_mapper, contract_data):
+    """Test cache clearing."""
+    enhanced_entity_mapper.map_entity(contract_data)
+    assert len(enhanced_entity_mapper._mapped_fields) > 0
+    
+    enhanced_entity_mapper.clear_caches()
+    assert len(enhanced_entity_mapper._mapped_fields) == 0
+    assert len(enhanced_entity_mapper._mapping_cache) == 0
+
+# Keep existing tests below

@@ -98,11 +98,11 @@ system:
     input:
       batch_size: 100
       field_pattern_exceptions: []
-      file: D:\VS Code Projects\USASpending\tests\data\test_transactions.csv
+      file: d:\VS Code Projects\USASpending\tests\data\test_transactions.csv
       skip_invalid_rows: false
       validate_input: true
     output:
-      directory: D:\VS Code Projects\USASpending\tests\data\output
+      directory: d:\VS Code Projects\USASpending\tests\data\output
       ensure_ascii: false
       entities_subfolder: entities
       indent: 2

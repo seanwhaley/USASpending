@@ -175,3 +175,33 @@ class ValidationEngine(IValidator):
                 visit(field)
                 
         return ordered
+
+def validate_data(config: Dict[str, Any]) -> bool:
+    """Validate data using configuration settings.
+    
+    Args:
+        config: Configuration dictionary containing validation rules
+        
+    Returns:
+        bool: True if validation passed, False otherwise
+    """
+    try:
+        engine = ValidationEngine(ConfigManager(config))
+        return all(
+            engine.validate_record(record)
+            for record in config.get('records', [])
+        )
+    except Exception as e:
+        logger.error(f"Data validation failed: {str(e)}")
+        return False
+
+# Add alias for backward compatibility
+ValidationGroupManager = ValidationEngine
+
+__all__ = [
+    'ValidationEngine',
+    'ValidationGroupManager',  # Add alias to __all__
+    'ValidationResult',
+    'ValidationRule',
+    'validate_data'  # Add to __all__
+]

@@ -8,6 +8,11 @@ import yaml
 import jsonschema
 from pydantic import BaseModel, Field, ConfigDict
 
+# For Pydantic v2 compatibility
+def list_factory():
+    """Factory function for creating empty lists."""
+    return []
+
 from .logging_config import get_logger
 from .config_validation import ConfigValidator, ValidationError
 
@@ -202,8 +207,8 @@ class ValidationGroup(BaseModel):
     name: str = Field(..., description="Name of validation group")
     description: Optional[str] = Field(None, description="Description of validation group purpose")
     enabled: bool = Field(default=True, description="Whether this group is active")
-    rules: List[str] = Field(default_factory=list, description="Validation rules in this group")
-    dependencies: List[str] = Field(default_factory(list), description="Other groups this depends on")
+    rules: List[str] = Field(default_factory=list_factory, description="Validation rules in this group")
+    dependencies: List[str] = Field(default_factory=list_factory, description="Other groups this depends on")
     error_level: str = Field(default="error", description="How to handle validation failures")
 
 class ValidationConfig(BaseModel):
@@ -363,3 +368,17 @@ ROOT_CONFIG_SCHEMA = {
     },
     "required": ["entities"]
 }
+
+# Add export of schemas
+__all__ = [
+    'CORE_SCHEMA',
+    'ROOT_CONFIG_SCHEMA',
+    'ENTITY_CONFIG_SCHEMA',
+    'ConfigLoader',
+    'TransformOperation',
+    'TransformationConfig',
+    'DependencyConfig',
+    'ValidationGroup',
+    'ValidationConfig',
+    'FieldProperties'
+]

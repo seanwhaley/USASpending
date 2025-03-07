@@ -262,173 +262,350 @@ Verify review completeness for [component/file]:
 
 Reference appropriate sections in 02_review_instructions.md and 03_review_template.md for each item.
 ```
-
 ## Comprehensive System Review Prompt
 ```
-Please conduct a complete system-wide review of the entire codebase, following the comprehensive analysis framework defined in 02_review_instructions.md and documenting according to 03_review_template.md:
+IMPORTANT: This is your primary instruction set for conducting a SINGLE COMPREHENSIVE system-wide review.
 
-1. Project Structure Analysis
-   - Document all folders and their purposes
-   - Analyze file organization patterns
-   - Review naming conventions
-   - Map component relationships
-   - Reference Project Structure section of 03_review_template.md
+1. Setup Phase [REQUIRED]
+   - Create ONE report file using 03_review_template.md structure
+   - THIS FILE WILL BE THE ONLY REVIEW FILE FOR THE ENTIRE ANALYSIS
+   - Review 02x_combined_review_framework.md completely
+   - Review 02_review_instructions.md for methodology details
+   - Begin progressive documentation in this single file immediately
 
-2. Configuration System Analysis
-   - Examine all YAML configurations
-   - Review schema definitions
-   - Validate rule coverage
-   - Check configuration relationships
-   - Document using Configuration Analysis section of 03_review_template.md
+2. Documentation Rules [REQUIRED]
+   A. Single File Focus:
+      - All analysis MUST be in one comprehensive file
+      - NO creating multiple review files
+      - NO partial or incomplete reviews
+      - Progressive updates to single file only
+   
+   B. Evidence Requirements:
+      - Every claim needs evidence citation
+      - Every metric needs measurement data
+      - Every issue needs reproduction steps
+      - Every recommendation needs justification
 
-3. Core Component Analysis
-   For each component in src/:
-   - Document purpose and responsibilities
-   - Analyze interfaces and dependencies
-   - Review error handling patterns
-   - Check resource management
-   - Map component interactions
-   - Follow Component Analysis section of 03_review_template.md
+3. Documentation Process [REQUIRED]
+   A. Progressive Documentation:
+      - Start with executive summary section
+      - Update each section as analysis progresses
+      - Complete each section before moving to next
+      - Reference all evidence and findings
+      - Maintain clear audit trail
+      
+   B. Section Completion:
+      - Fill sections progressively
+      - NO placeholder text
+      - NO "to be completed" markers
+      - ALL sections must be evidence-based
+      - VERIFY completion before moving on
 
-4. Data Processing Pipeline Analysis
-   - Map data flow through system
-   - Document transformation rules
-   - Analyze validation patterns
-   - Review error handling
-   - Measure performance characteristics
-   - Use Data Flow Analysis section of 03_review_template.md
+4. Review Phases [REQUIRED - COMPLETE IN ORDER]
+   A. File Analysis Phase:
+      - Document all folders and files with purposes
+      - Analyze src/ directory files first
+      - Review test files and coverage
+      - Analyze configuration files
+      - Update single report after EACH file
+      
+   B. System Analysis Phase:
+      - Component integration analysis
+      - Build & deployment review
+      - Compliance evaluation
+      - Cross-reference with file findings
 
-5. Test Coverage Analysis
-   For each test folder:
-   - Document test strategy
-   - Analyze coverage metrics
-   - Review test patterns
-   - Identify gaps
-   - Check integration tests
-   - Follow Testing Results section of 03_review_template.md
+   C. Quality Assessment Phase:
+      - Performance metrics collection
+      - Security evaluation
+      - Test coverage analysis
+      - Compliance status verification
 
-6. Documentation Review
-   For all documentation:
-   - Verify completeness
-   - Check accuracy
-   - Review clarity
-   - Identify gaps
-   - Document using Documentation section of 03_review_template.md
+5. Required Content [REQUIRED]
+   A. Technical Understanding:
+      - Complete system architecture
+      - Component interactions
+      - Data flows
+      - Resource management
 
-7. Performance Analysis
-   - Collect baseline metrics
-   - Identify bottlenecks
-   - Review resource usage
-   - Check scaling patterns
-   - Document using Performance Analysis section of 03_review_template.md
+   B. Quality Assessment:
+      - Test coverage analysis
+      - Performance metrics
+      - Security evaluation
+      - Compliance status
 
-8. Security Review
-   - Analyze authentication/authorization
-   - Review data protection
-   - Check input validation
-   - Verify secure configurations
-   - Document using Security Analysis section of 03_review_template.md
+   C. Recommendations:
+      - Prioritized improvements
+      - Implementation approaches
+      - Resource requirements
+      - Success criteria
 
-9. Build and Deployment Analysis
-   - Review build process
-   - Check deployment patterns
-   - Analyze dependencies
-   - Verify configurations
-   - Document using Build/Deploy section of 03_review_template.md
+The output report must serve as a complete system audit document useful for:
+- New team members understanding the system
+- Auditors verifying quality and compliance
+- Management understanding status and needs
+- Developers identifying improvements
+- Operations understanding characteristics
 
-10. Quality Metrics
-    - Code quality metrics
-    - Test coverage
-    - Documentation completeness
-    - Performance benchmarks
-    - Security scan results
-    - Use Metrics section of 03_review_template.md
+Remember:
+1. ONE file for entire review
+2. NO parallel review files
+3. NO incomplete sections
+4. MUST have evidence
+5. MUST update progressively
 
-11. Issue Analysis
-    For each component:
-    - Document all issues found
-    - Analyze root causes
-    - Assess impact
-    - Propose solutions
-    - Follow Issue Analysis section of 03_review_template.md
+Follow 02_review_instructions.md for all detailed methodology on reviewing:
+- Project structure analysis
+- Source code review
+- Test coverage assessment
+- Configuration analysis
+- System integration review
+- Compliance evaluation
+```
 
-12. Risk Assessment
-    - Technical risks
-    - Security risks
-    - Performance risks
-    - Maintenance risks
-    - Document using Risk Assessment section of 03_review_template.md
+## Project State Analysis Prompt
+```
+IMPORTANT: You are now a Senior Systems Architect specializing in YAML-driven architectures. Your task is to conduct a COMPREHENSIVE project state analysis of the provided codebase.
 
-13. Improvement Recommendations
-    For each area:
-    - Prioritized improvements
-    - Implementation approach
-    - Resource requirements
-    - Success criteria
-    - Use Recommendations section of 03_review_template.md
+1. Initial Setup [REQUIRED]
+   - Create a report file named "Project_State_Analysis_{YYYY-MM-DD}.md" using the XX_project_state_analysis.md template
+   - THIS REPORT WILL BE YOUR SINGLE DELIVERABLE - incorporate ALL findings here
+   - Review 001_YAML_Explanation.md completely before starting
+   - Study XX_project_state_analysis_instructions.md for your methodology
+   - Begin documenting in this single file immediately and progressively
 
-14. Compliance Analysis
-    - Standard compliance
-    - Best practices alignment
-    - Code standards
-    - Documentation standards
-    - Follow Compliance section of 03_review_template.md
+2. Communication Protocol [REQUIRED]
+   - DO NOT post analysis content in chat - ALL findings belong in the report
+   - Use chat ONLY for brief status updates (e.g., "Analyzing YAML configurations: 25% complete")
+   - DO NOT ask questions during analysis - make reasonable assumptions based on available evidence
+   - Submit only the completed report as your final deliverable
 
-Create a comprehensive report that provides:
-1. Complete system understanding without needing to read any code
-2. Clear documentation of every component's purpose and status
-3. Full analysis of all identified issues and risks
-4. Concrete, actionable improvement recommendations
-5. Detailed metrics and evidence for all findings
+3. Documentation Standards [REQUIRED]
+   A. Single Report Focus:
+      - ALL analysis MUST be in one comprehensive file
+      - NO creating multiple analysis files
+      - NO partial analysis documents
+      - Progressive updates to single file only
+   
+   B. Evidence Standards:
+      - Every YAML configuration element requires explicit mapping to code (file:line)
+      - Every implementation needs specific configuration reference
+      - Every relationship needs both YAML and code evidence
+      - Every metric needs concrete measurement data
+      - Every claim requires specific file:line citation
 
-Structure the report following 03_review_template.md exactly, ensuring all sections are thoroughly completed with specific details, metrics, and evidence.
+4. Analysis Process [REQUIRED - IN ORDER]
+   A. YAML Configuration Analysis:
+      - Document all .yaml/.yml files with locations and purposes
+      - Map complete configuration hierarchy with inheritance chains
+      - Analyze validation groups and their implementation
+      - Document relationships between configuration elements
+      - Verify implementation coverage with evidence
 
-Output should serve as a complete system audit document that could be used by:
-- New team members to understand the entire system
-- Auditors to verify system quality and compliance
-- Management to understand system status and needs
-- Developers to identify areas for improvement
-- Operations to understand system characteristics
+   B. Entity Structure Analysis:
+      - Map all entity definitions with inheritance relationships
+      - Document field properties including types, constraints, and defaults
+      - Analyze entity relationships with cardinality and constraints
+      - Verify transformations between external and internal representations
+      - Cross-reference with implementation code
+
+   C. Implementation Analysis:
+      - Verify configuration loading mechanisms and error handling
+      - Assess validation implementation coverage against schema definitions
+      - Map transformation execution paths through the codebase
+      - Document relationship handling implementation
+      - Analyze error management strategies and recovery mechanisms
+
+5. Documentation Process [REQUIRED]
+   A. Progressive Documentation:
+      - Begin with executive summary of YAML configuration architecture
+      - Document each configuration layer with evidence
+      - Map implementations progressively, updating coverage metrics
+      - Update analysis continuously as you discover new patterns
+      - Maintain clear traceability between config and implementation
+
+   B. Section Completion Requirements:
+      - Complete each section fully before moving to the next
+      - NO placeholder text or promissory notes
+      - NO "TBD" markers or incomplete sections
+      - ALL sections must include concrete evidence
+      - VERIFY completeness of each section before proceeding
+
+6. Required Analysis Areas [REQUIRED]
+   A. Configuration Coverage Analysis:
+      - Complete YAML inventory with structural analysis
+      - Configuration hierarchy diagram with inheritance paths
+      - Implementation mapping table with coverage percentages
+      - Coverage metrics for each major component
+      - Gap analysis with prioritized recommendations
+
+   B. Entity Analysis:
+      - Complete entity relationship diagram
+      - Relationship mapping with constraints and validation rules
+      - Comprehensive validation rule inventory
+      - Transformation path documentation
+      - Storage pattern analysis with persistence strategies
+
+   C. Implementation Verification:
+      - Configuration loading process map
+      - Validation execution flow analysis
+      - Transformation processing sequence documentation
+      - Relationship handling implementation assessment
+      - Error management strategy evaluation
+
+7. Evidence Collection Requirements [REQUIRED]
+   A. Configuration Evidence:
+      - YAML file locations and version control information
+      - Configuration section line numbers for key definitions
+      - Schema definitions with validation constraints
+      - Validation rules with implementation references
+      - Default values and their sources
+
+   B. Implementation Evidence:
+      - Configuration loading code with file:line citations
+      - Validation implementation code references
+      - Transformation code with mapping to requirements
+      - Relationship handling mechanisms
+      - Test coverage metrics for configuration features
+
+   C. Integration Evidence:
+      - Configuration validation test results
+      - Entity processing flow traces
+      - Relationship management implementation examples
+      - Error handling test cases and results
+      - Performance impact measurements
+
+Your report must serve as a comprehensive system state document that enables:
+- Complete understanding of the configuration-driven architecture
+- Verification of configuration coverage and effectiveness
+- Identification of gaps between configuration and implementation
+- Planning for future enhancements with clear priorities
+- Efficient onboarding of new team members
+
+Remember:
+1. You are a Senior Systems Architect delivering a professional analysis
+2. Configuration drives implementation - follow the YAML trail
+3. ONE file contains your entire analysis
+4. ALL sections must be complete with evidence
+5. Document findings progressively and comprehensively
+6. Focus exclusively on current state with evidence-based assessment
+
+Follow XX_project_state_analysis_instructions.md methodology for analyzing:
+- YAML configuration structure and validation
+- Entity relationships and constraints
+- Implementation coverage and effectiveness
+- Validation patterns and enforcement
+- Resource management strategies
+- Error handling and recovery mechanisms
+```
+
+### Logging Configuration Analysis
+```
+As a Systems Reliability Engineer, analyze the project's logging configuration:
+
+1. Logging Configuration Discovery
+   - Identify all logging config files with locations
+   - Map logger hierarchy with inheritance relationships
+   - Document handlers and formatters with complete configurations
+   - Review log rotation settings and retention policies
+
+2. Implementation Analysis
+   - Document logger instantiation patterns with code examples
+   - Analyze log level usage across different components
+   - Evaluate message formatting consistency and standards
+   - Assess error reporting patterns and exception handling
+
+3. Log Management
+   - Analyze file management strategy including naming conventions
+   - Document rotation policies with trigger conditions
+   - Evaluate retention settings and archival processes
+   - Calculate storage requirements based on volume metrics
+
+4. Required Evidence Collection
+   A. Configuration Evidence:
+      - Complete logger definitions with hierarchies
+      - Handler configurations with output destinations
+      - Formatter settings with pattern examples
+      - Level definitions and their application contexts
+
+   B. Implementation Evidence:
+      - Logger setup code with initialization patterns
+      - Usage patterns across different component types
+      - Error handling integration with logging
+      - Performance impact measurements
+
+   C. Operations Evidence:
+      - Log file locations and organization structure
+      - Rotation behavior verification with examples
+      - Cleanup processes and scheduling
+      - Storage metrics with growth projections
+
+Document all findings in the Error Handling and Logging section of your Project_State_Analysis report.
+Incorporate ALL evidence directly in the report - do not post in chat.
+```
+
+### Data Dictionary Analysis
+```
+As a Data Integration Specialist, analyze the project's data dictionary implementation:
+
+1. Data Dictionary Configuration Analysis
+   - Locate and catalog all dictionary mapping files
+   - Document field mappings with complete transformation paths
+   - Analyze transformation rules with validation logic
+   - Verify validation constraints against business rules
+
+2. Dictionary Implementation Assessment
+   - Document field name normalization patterns
+   - Analyze type conversion rules and edge cases
+   - Evaluate default value handling strategies
+   - Verify validation implementation completeness
+
+3. Coverage Analysis
+   - Quantify source field coverage percentages
+   - Assess target field coverage with gap analysis
+   - Measure transform coverage across field types
+   - Calculate validation coverage with rule counts
+
+4. Required Evidence Collection
+   A. Mapping Configuration Evidence:
+      - Document dictionary source files with versions
+      - Provide field mapping tables with complete paths
+      - Include transform rule definitions with examples
+      - List validation rules with implementation references
+
+   B. Implementation Evidence:
+      - Include mapping code with file:line citations
+      - Document transform code with type handling
+      - Show validation code with constraint enforcement
+      - Provide test coverage metrics for dictionary features
+
+   C. Integration Evidence:
+      - Document loading process with initialization sequence
+      - Show validation flow with error handling
+      - Provide error handling examples with recovery
+      - Include performance impact measurements
+
+Document all findings in the Data Dictionary Mapping section of your Project_State_Analysis report.
+Incorporate ALL evidence directly in the report - do not post in chat.
 ```
 
 ## Template Cross-Reference Guide
 
 ### Review Documentation Flow
+1. Start with this prompt and create report file
+2. Follow methodology in 02x_combined_review_framework.md
+3. Document findings in 03_review_template.md
+4. Track updates and evidence progressively
+5. Complete all required sections with citations
 
-1. Start with prompts in this file (`01_AI_Prompts.md`)
-2. Follow methodology in `02_review_instructions.md`
-3. Document findings in `03_review_template.md`
-4. Plan changes using `04_update_instructions.md`
-5. Track updates in `05_update_template.md`
-6. Follow implementation guide in `06_implementation_instructions.md`
-7. Document implementation in `07_implementation_template.md`
+### Required Templates
+1. 03_review_template.md - Core report structure
+2. 02x_combined_review_framework.md - Analysis methodology
+3. 02_review_instructions.md - Detailed frameworks
 
-### Key Template Sections
-
-| Template | Key Sections | When to Use |
-|----------|-------------|-------------|
-| 02_review_instructions.md | Root Cause Analysis, Validation Framework | During analysis phase |
-| 03_review_template.md | Issue Analysis, Impact Assessment | Documenting findings |
-| 04_update_instructions.md | Validation Process, Success Criteria | Planning changes |
-| 05_update_template.md | Implementation Updates, Validation Results | Tracking progress |
-| 06_implementation_instructions.md | Implementation Framework, Patterns | During implementation |
-| 07_implementation_template.md | Issue Resolution, Validation Results | Final documentation |
-
-### Documentation Requirements
-
-Each identified issue must be tracked through these templates:
-
-1. **Analysis Phase**
-   - Root cause in `03_review_template.md`
-   - Impact assessment in `03_review_template.md`
-   - Recommendations in `03_review_template.md`
-
-2. **Planning Phase**
-   - Implementation plan in `04_update_instructions.md`
-   - Success criteria in `04_update_instructions.md`
-   - Validation requirements in `04_update_instructions.md`
-
-3. **Implementation Phase**
-   - Changes documented in `06_implementation_instructions.md`
-   - Validation results in `07_implementation_template.md`
-   - Issue resolution in `05_update_template.md`
+### Documentation Standards
+1. Evidence must be cited
+2. Claims must be verified
+3. Updates must be progressive
+4. Template structure must be followed
+5. Frameworks must be referenced

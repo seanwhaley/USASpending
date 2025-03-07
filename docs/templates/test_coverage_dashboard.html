@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>USASpending Test Coverage Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/css/uswds.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .usa-card__container { height: 100%; }
+        .usa-card__body { display: flex; flex-direction: column; align-items: center; }
+        .metric-value { font-size: 2rem; font-weight: bold; margin: 1rem 0; }
+        .metric-value.success { color: #00a91c; }
+        .metric-value.warning { color: #ffbe2e; }
+        .metric-value.error { color: #d54309; }
+    </style>
+</head>
+<body>
+    <a class="usa-skipnav" href="#main-content">Skip to main content</a>
+    
+    <div class="usa-overlay"></div>
+    
+    <header class="usa-header usa-header--extended" role="banner">
+        <div class="usa-navbar">
+            <div class="usa-logo" id="extended-logo">
+                <em class="usa-logo__text">
+                    <a href="/" title="Home">USASpending Test Coverage</a>
+                </em>
+            </div>
+            <button type="button" class="usa-menu-btn">Menu</button>
+        </div>
+        <nav aria-label="Primary navigation" class="usa-nav">
+            <div class="usa-nav__inner">
+                <button type="button" class="usa-nav__close">
+                    <img src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/img/usa-icons/close.svg" role="img" alt="Close" />
+                </button>
+                <ul class="usa-nav__primary usa-accordion">
+                    <li class="usa-nav__primary-item">
+                        <a href="#coverage-summary" class="usa-nav__link">Coverage Summary</a>
+                    </li>
+                    <li class="usa-nav__primary-item">
+                        <a href="#validation-results" class="usa-nav__link">Validation Results</a>
+                    </li>
+                    <li class="usa-nav__primary-item">
+                        <a href="#module-coverage" class="usa-nav__link">Module Coverage</a>
+                    </li>
+                </ul>
+            </div>
+        </nav>
+    </header>
+
+    <main id="main-content" class="usa-layout-docs usa-section">
+        <div class="grid-container">
+            <div class="usa-alert usa-alert--info" role="status">
+                <div class="usa-alert__body">
+                    <h4 class="usa-alert__heading">Dashboard Status</h4>
+                    <p class="usa-alert__text">Generated on {{ generation_time }}</p>
+                </div>
+            </div>
+            
+            <section id="coverage-summary" class="padding-top-4">
+                <h1 class="usa-heading">Test Coverage Summary</h1>
+                
+                <div class="grid-row grid-gap margin-top-4">
+                    <div class="tablet:grid-col-3">
+                        <div class="usa-card">
+                            <div class="usa-card__container">
+                                <header class="usa-card__header">
+                                    <h2 class="usa-card__heading">Coverage</h2>
+                                </header>
+                                <div class="usa-card__body">
+                                    <span class="metric-value {{ coverage_status_class }}">{{ total_coverage }}%</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="tablet:grid-col-3">
+                        <div class="usa-card">
+                            <div class="usa-card__container">
+                                <header class="usa-card__header">
+                                    <h2 class="usa-card__heading">Test Quality</h2>
+                                </header>
+                                <div class="usa-card__body">
+                                    <span class="metric-value {{ quality_status_class }}">{{ test_quality_score }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="tablet:grid-col-3">
+                        <div class="usa-card">
+                            <div class="usa-card__container">
+                                <header class="usa-card__header">
+                                    <h2 class="usa-card__heading">Modules Needing Tests</h2>
+                                </header>
+                                <div class="usa-card__body">
+                                    <span class="metric-value {{ gaps_status_class }}">{{ modules_without_tests }}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="tablet:grid-col-3">
+                        <div class="usa-card">
+                            <div class="usa-card__container">
+                                <header class="usa-card__header">
+                                    <h2 class="usa-card__heading">Validation Status</h2>
+                                </header>
+                                <div class="usa-card__body">
+                                    <span class="metric-value {{ validation_status_class }}">
+                                        {{ validation_status_icon }}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="usa-prose margin-top-4">
+                    <div class="border-base-lighter border-2px padding-2" style="height: 300px">
+                        <canvas id="coverageTrendChart"></canvas>
+                    </div>
+                </div>
+            </section>
+            
+            <section id="validation-results" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                <h2 class="usa-heading">Validation Results</h2>
+                {{ validation_checks_html | safe }}
+            </section>
+            
+            <section id="module-coverage" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                <h2 class="usa-heading">Coverage by Module</h2>
+                <div class="usa-table-container--scrollable">
+                    <table class="usa-table usa-table--borderless">
+                        <thead>
+                            <tr>
+                                <th scope="col">Module</th>
+                                <th scope="col" class="text-center">Coverage</th>
+                                <th scope="col" class="text-right">Missing Lines</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{ module_coverage_html | safe }}
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Add functional coverage section -->
+            <section id="functional-coverage" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                <h2 class="usa-heading">Functional Coverage</h2>
+                <div id="functional-coverage-content">
+                    {{ functional_coverage_html | safe }}
+                </div>
+            </section>
+
+            <!-- Add test gaps section if there are modules without tests -->
+            <section id="test-gaps" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                <h2 class="usa-heading">Modules Needing Tests</h2>
+                <div id="test-gaps-content">
+                    {{ test_gaps_html | safe }}
+                </div>
+            </section>
+        </div>
+    </main>
+    
+    <footer class="usa-footer">
+        <div class="grid-container usa-footer__return-to-top">
+            <a href="#">Return to top</a>
+        </div>
+        <div class="usa-footer__secondary-section">
+            <div class="grid-container">
+                <div class="grid-row grid-gap">
+                    <div class="usa-footer__logo grid-row mobile-lg:grid-col-6 mobile-lg:grid-gap-2">
+                        <div class="mobile-lg:grid-col-auto">
+                            <h3 class="usa-footer__logo-heading">USASpending Test Coverage Dashboard</h3>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </footer>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/js/uswds.min.js"></script>
+    
+    <script>
+        // Initialize USWDS components
+        window.addEventListener('load', function() {
+            window.uswds = new USWDS();
+        });
+        
+        // Initialize chart data
+        const chartData = {{ chart_data }};
+        
+        // Coverage Trend Chart
+        const coverageCtx = document.getElementById('coverageTrendChart').getContext('2d');
+        const coverageChart = new Chart(coverageCtx, {
+            type: 'line',
+            data: {
+                labels: chartData.dates,
+                datasets: [{
+                    label: 'Code Coverage %',
+                    data: chartData.coverage,
+                    backgroundColor: 'rgba(0, 113, 188, 0.2)',
+                    borderColor: '#005ea2',
+                    borderWidth: 2,
+                    pointBackgroundColor: '#005ea2',
+                    tension: 0.2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: false,
+                        min: Math.max(0, Math.floor(Math.min(...chartData.coverage || [0]) - 10)),
+                        max: Math.min(100, Math.ceil(Math.max(...chartData.coverage || [100]) + 10)),
+                        title: {
+                            display: true,
+                            text: 'Coverage %'
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: true,
+                            text: 'Date'
+                        }
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                return `Coverage: ${context.raw}%`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

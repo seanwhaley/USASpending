@@ -5,25 +5,139 @@ description: Template for documenting code review findings with comprehensive an
 version: 1.0.0
 ---
 
-# Code Review Report
+# Code Review Report Template
+[REQUIRED: Use this template for creating ONE comprehensive system review document. NO parallel or incomplete reviews allowed.]
+
+## Document Control
+**Version**: [version]  
+**Date**: [date]  
+**Review Status**: [In Progress/Complete]  
+**Evidence Collection Status**: [percentage]
+
+### Automated Analysis Status
+[REQUIRED: Run and document ALL automated analysis tools]
+
+#### 1. Coverage Analysis (`tools/functional_coverage_analyzer.py`)
+**Last Run**: [timestamp]  
+**Report**: functional_coverage_report.json
+```json
+{
+    "total_functions": "[count]",
+    "tested_functions": "[count]",
+    "coverage_percentage": "[X]%",
+    "high_priority_gaps": [
+        "[component1]",
+        "[component2]"
+    ],
+    "medium_priority_gaps": [
+        "[component3]",
+        "[component4]"
+    ]
+}
+```
+
+#### 2. Test Gap Analysis (`tools/test_gap_analyzer.py`)
+**Last Run**: [timestamp]  
+**Report**: test_gap_report.json
+```json
+{
+    "total_gaps": "[count]",
+    "critical_untested": "[count]",
+    "high_priority": "[count]",
+    "medium_priority": "[count]",
+    "components": {
+        "[component1]": {
+            "status": "untested",
+            "priority": "high",
+            "risk": "data corruption"
+        }
+    }
+}
+```
+
+#### 3. Test Quality Analysis (`tools/test_quality_analyzer.py`)
+**Last Run**: [timestamp]  
+**Report**: test_quality_report.json
+```json
+{
+    "overall_score": "[X]/100",
+    "files_needing_improvement": "[count]",
+    "pattern_issues": "[count]",
+    "documentation_issues": "[count]",
+    "issues_by_component": {
+        "[component1]": {
+            "score": "[X]/100",
+            "main_issues": [
+                "missing assertions",
+                "poor naming"
+            ]
+        }
+    }
+}
+```
+
+### Analysis Summary Matrix
+| Category | Status | Critical Issues | Priority |
+|----------|--------|----------------|-----------|
+| Coverage | [percentage] | [count] untested | High/Medium/Low |
+| Test Gaps | [gap count] | [count] critical | High/Medium/Low |
+| Quality | [score]/100 | [count] issues | High/Medium/Low |
+
+### Required Action Items
+[REQUIRED: Document specific actions needed based on automated analysis]
+
+| Tool | Finding | Required Action | Priority |
+|------|----------|----------------|-----------|
+| Coverage | [finding] | [action] | High/Medium/Low |
+| Gaps | [finding] | [action] | High/Medium/Low |
+| Quality | [finding] | [action] | High/Medium/Low |
+
+### Automated Analysis Evidence
+**Last Updated**: [timestamp]  
+**Tool Run Status**: [all tools completed/partial]
+
+| Analysis Type | Tool | Last Run | Status |
+|--------------|------|-----------|--------|
+| Functional Coverage | functional_coverage_analyzer.py | [timestamp] | Complete/Pending |
+| Test Gaps | test_gap_analyzer.py | [timestamp] | Complete/Pending |
+| Test Quality | test_quality_analyzer.py | [timestamp] | Complete/Pending |
+
+### Key Metrics Summary
+
+#### Functional Coverage Analysis
+**Source**: functional_coverage_report.json
+- Total Public Functions: [count]
+- Tested Functions: [count]
+- Coverage Ratio: [percentage]%
+- High Priority Gaps: [count]
+- Medium Priority Gaps: [count]
+
+#### Test Gap Analysis
+**Source**: test_gap_report.json
+- Total Test Gaps: [count]
+- Critical Components Untested: [count]
+- High Priority Items: [count]
+- Medium Priority Items: [count]
+
+#### Test Quality Metrics
+**Source**: test_quality_report.json
+- Overall Quality Score: [score]/100
+- Files Needing Improvement: [count]
+- Test Pattern Issues: [count]
+- Documentation Issues: [count]
 
 ## Executive Summary
+[REQUIRED: Begin here and update as analysis progresses. NO placeholders.]
 
-**Review Date**: [YYYY-MM-DD]  
-**Reviewer**: [Name/ID]  
-**Review Type**: [Performance/Security/Architecture/Full System]  
-**Components**: [List of primary components reviewed]  
-**Review Score**: [1-5 scale with 5 being best]
-
-### Key Findings Summary
+### Key Findings Matrix
+[REQUIRED: Evidence-based summary. Update as analysis progresses.]
 
 | Category | Critical | Important | Moderate | Minor |
 |----------|----------|-----------|----------|-------|
-| Functional | # | # | # | # |
-| Configuration | # | # | # | # |
-| Performance | # | # | # | # |
-| Security | # | # | # | # |
-| Reliability | # | # | # | # |
+| Functional | [count with refs] | [count with refs] | [count with refs] | [count with refs] |
+| Performance | [count with refs] | [count with refs] | [count with refs] | [count with refs] |
+| Security | [count with refs] | [count with refs] | [count with refs] | [count with refs] |
+| Reliability | [count with refs] | [count with refs] | [count with refs] | [count with refs] |
 
 ### Primary Recommendations
 
@@ -496,3 +610,23 @@ flowchart TD
 | Error Handling | [X%] | [Y%] | ✅/⚠️/❌ |
 | State Transitions | [X%] | [Y%] | ✅/⚠️/❌ |
 | Resource Management | [X%] | [Y%] | ✅/⚠️/❌ |
+
+## Progressive Documentation Requirements
+[REQUIRED: Check these requirements as sections are completed. ALL must be checked before review is considered complete.]
+
+### Documentation Quality
+- [ ] All claims have evidence citations
+- [ ] All metrics include measurement data
+- [ ] All issues include reproduction steps
+- [ ] All recommendations include justification
+- [ ] No sections contain placeholder text
+- [ ] No "to be completed" markers remain
+- [ ] Evidence collection is complete
+- [ ] Analysis is thorough and verified
+
+### Section Dependencies
+- [ ] Executive Summary reflects full analysis
+- [ ] Issue Analysis connects to Root Causes
+- [ ] Recommendations link to specific Issues
+- [ ] Implementation Plan covers all Recommendations
+- [ ] Validation Plan verifies all changes

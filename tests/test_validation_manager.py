@@ -1,7 +1,7 @@
-"""Tests for validation group and dependency management."""
+"""Tests for validation manager functionality."""
 import pytest
-from src.usaspending.validation_manager import ValidationManager, ValidationGroup, FieldDependency
-from src.usaspending.exceptions import ConfigurationError
+from usaspending.validation_manager import ValidationManager, ValidationGroup, FieldDependency
+from usaspending.exceptions import ConfigurationError
 
 @pytest.fixture
 def sample_config():

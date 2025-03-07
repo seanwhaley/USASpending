@@ -398,6 +398,47 @@ using (var connection = new DatabaseConnection())
    - Data protection
    - Compliance issues
 
+## Metrics & Evidence
+
+### Automated Analysis Tools
+
+The following tools are available to generate evidence-backed metrics for documentation:
+
+1. **Functional Coverage Analyzer** (`tools/functional_coverage_analyzer.py`)
+   - Analyzes function-level test coverage
+   - Outputs results to `functional_coverage_report.json`
+   - Run with: `python tools/functional_coverage_analyzer.py`
+   - Key metrics: total functions, tested functions, coverage percentage
+
+2. **Test Gap Analyzer** (`tools/test_gap_analyzer.py`)
+   - Identifies untested code and prioritizes test creation
+   - Outputs results to `test_gap_report.json`
+   - Run with: `python tools/test_gap_analyzer.py`
+   - Key metrics: gaps found, priority levels
+
+3. **Test Quality Analyzer** (`tools/test_quality_analyzer.py`)
+   - Evaluates test implementation quality
+   - Outputs results to `test_quality_report.json`
+   - Run with: `python tools/test_quality_analyzer.py`
+   - Key metrics: quality score, improvement areas
+
+### Using Tool Outputs
+
+When writing documentation:
+1. Run all analysis tools before starting documentation
+2. Reference the JSON reports in your documentation
+3. Include timestamps of when analysis was performed
+4. Link directly to source data in the reports
+5. Update analysis before major reviews
+
+### Evidence Requirements
+
+All metrics in documentation MUST:
+1. Reference an automated tool or specific source file
+2. Include the timestamp of data collection
+3. Link to raw data when possible
+4. Be reproducible using provided tools
+
 ## Methodology Integration
 
 ### Kepner-Tregoe Analysis

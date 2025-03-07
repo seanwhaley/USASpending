@@ -23,12 +23,14 @@ class EnumFieldAdapter(ISchemaAdapter):
         else:
             self.valid_values: Set[str] = {v.lower() for v in valid_values if v is not None}
     
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate(self, value: Any, rules: Dict[str, Any],
+                validation_context: Optional[Dict[str, Any]] = None) -> bool:
         """Validate value against allowed enum values.
         
         Args:
             value: Value to validate
-            field_name: Field name for error messages
+            rules: Validation rules
+            validation_context: Optional validation context
             
         Returns:
             True if value is valid, False otherwise
@@ -44,21 +46,20 @@ class EnumFieldAdapter(ISchemaAdapter):
             
         if check_value not in self.valid_values:
             self.errors.append(
-                f"{field_name}: Value '{value}' not in valid values: {sorted(self.valid_values)}"
+                f"Value '{value}' not in valid values: {sorted(self.valid_values)}"
             )
             return False
             
         return True
     
-    def transform(self, value: Any, field_name: str) -> Any:
-        """Transform value to a valid enum value if possible.
+    def transform(self, value: Any) -> Any:
+        """Transform value to standardized enum value if possible.
         
         Args:
             value: Value to transform
-            field_name: Field name (not used in this implementation)
             
         Returns:
-            The original value if valid, None otherwise
+            The standardized value if valid, None otherwise
         """
         if value is None:
             return None
@@ -72,7 +73,7 @@ class EnumFieldAdapter(ISchemaAdapter):
             
         return None
     
-    def get_validation_errors(self) -> List[str]:
+    def get_errors(self) -> List[str]:
         """Get validation error messages.
         
         Returns:

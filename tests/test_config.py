@@ -1,7 +1,7 @@
-"""Tests for configuration management system."""
+"""Tests for configuration management functionality."""
 import pytest
-from src.usaspending.config import ConfigManager
-from src.usaspending.exceptions import ConfigurationError
+from usaspending.config import ConfigManager
+from usaspending.exceptions import ConfigurationError
 
 @pytest.fixture
 def test_config_data():

@@ -1,10 +1,16 @@
 from unittest.mock import Mock
 import pytest
 import shutil
-import csv
 import yaml
 from pathlib import Path
-import os
+from enum import Enum
+
+from usaspending.schema_adapters import (
+    StringAdapter,
+    NumericAdapter,
+    DateAdapter,
+    CompositeFieldAdapter,
+)
 
 # Test data directory setup
 TEST_DATA_DIR = Path(__file__).parent / "data"
@@ -261,3 +267,29 @@ def test_data_setup(test_csv_path, output_dir, entities_dir):
         "output_dir": output_dir,
         "entities_dir": entities_dir
     }
+
+"""Shared test fixtures and configuration."""
+class TestEnum(Enum):
+    """Test enum for adapter testing."""
+    OPTION_A = "a"
+    OPTION_B = "b"
+
+@pytest.fixture
+def string_adapter():
+    """Create string adapter for testing."""
+    return StringAdapter(min_length=2, max_length=5, pattern=r'^[a-z]+$')
+
+@pytest.fixture
+def numeric_adapter():
+    """Create numeric adapter for testing."""
+    return NumericAdapter(min_value=0, max_value=100)
+
+@pytest.fixture
+def date_adapter():
+    """Create date adapter for testing."""
+    return DateAdapter(formats=['%Y-%m-%d', '%d/%m/%Y'])
+
+@pytest.fixture
+def composite_adapter():
+    """Create composite adapter for testing."""
+    return CompositeFieldAdapter('test_field', [str.strip, str.upper])

@@ -9,6 +9,7 @@ from .validation_base import BaseValidator
 from .text_file_cache import TextFileCache
 from .exceptions import EntityMappingError
 from .interfaces import IEntityMapper
+from .schema_adapters import SchemaAdapterFactory
 
 logger = get_logger(__name__)
 
