@@ -1,165 +1,226 @@
 """Tests for validation service functionality."""
 import pytest
+from typing import Dict, Any, Optional, List
 from unittest.mock import Mock, patch
-from typing import Dict, Any, Optional
 
 from usaspending.validation_service import ValidationService
-from usaspending.validation_rules import ValidationRuleLoader
-from usaspending.exceptions import ValidationError
+from usaspending.interfaces import IValidationMediator
+
+
+class MockValidationMediator(IValidationMediator):
+    """Mock validation mediator for testing."""
+    
+    def __init__(self, should_validate: bool = True):
+        self._should_validate = should_validate
+        self._errors: List[str] = []
+        self._last_context: Optional[Dict[str, Any]] = None
+    
+    def validate_entity(self, entity_type: str, data: Dict[str, Any]) -> bool:
+        if not self._should_validate:
+            self._errors.append(f"Entity validation failed for {entity_type}")
+            return False
+        return True
+    
+    def validate_field(self, field_name: str, value: Any, entity_type: Optional[str] = None) -> bool:
+        self._last_context = {'field': field_name, 'value': value, 'entity_type': entity_type}
+        if not self._should_validate:
+            self._errors.append(f"Field validation failed for {field_name}")
+            return False
+        return True
+    
+    def get_validation_errors(self) -> List[str]:
+        return self._errors.copy()
+
 
 @pytest.fixture
-def mock_rule_loader():
-    """Create mock validation rule loader."""
-    loader = Mock(spec=ValidationRuleLoader)
-    loader.get_field_rules.return_value = {
-        'type': 'string',
-        'required': True,
-        'min_length': 3
+def valid_config():
+    """Create valid test configuration."""
+    return {
+        'validation_types': {
+            'string': [
+                {'type': 'pattern', 'pattern': '[A-Za-z]+'},
+                {'type': 'length', 'min': 1, 'max': 100}
+            ],
+            'number': [
+                {'type': 'range', 'min': 0, 'max': 1000}
+            ]
+        },
+        'field_types': {
+            'name': 'string',
+            'amount': 'number',
+            'code_*': 'string'
+        },
+        'field_dependencies': {
+            'end_date': {
+                'fields': ['start_date'],
+                'validation': {
+                    'type': 'date_range',
+                    'min_field': 'start_date'
+                }
+            },
+            'sub_amount': {
+                'fields': ['total_amount'],
+                'validation': {
+                    'type': 'range',
+                    'max_field': 'total_amount'
+                }
+            }
+        }
     }
-    return loader
+
 
 @pytest.fixture
-def validation_service(mock_rule_loader):
+def mock_mediator():
+    """Create validation mediator mock."""
+    return MockValidationMediator()
+
+
+@pytest.fixture
+def validation_service(valid_config, mock_mediator):
     """Create validation service instance."""
-    return ValidationService(mock_rule_loader)
+    return ValidationService(mock_mediator, valid_config)
 
-@pytest.fixture
-def mock_adapter():
-    """Create mock field adapter."""
-    adapter = Mock()
-    adapter.validate.return_value = True
-    adapter.get_errors.return_value = []
-    return adapter
 
-def test_validation_service_initialization(validation_service, mock_rule_loader):
-    """Test validation service initialization."""
-    assert validation_service.rule_loader == mock_rule_loader
-    assert isinstance(validation_service._rule_cache, dict)
-    assert isinstance(validation_service._required_fields, set)
+def test_validation_service_initialization(validation_service, mock_mediator, valid_config):
+    """Test service initialization."""
+    assert validation_service._mediator == mock_mediator
+    assert validation_service._config == valid_config
+    assert len(validation_service._rules) > 0
+    assert len(validation_service._dependencies) > 0
 
-def test_validate_field_with_rules(validation_service, mock_adapter):
-    """Test field validation with rules."""
-    validation_service.register_adapter('test_field', mock_adapter)
-    
-    assert validation_service.validate_field('test_field', 'valid value')
-    mock_adapter.validate.assert_called_once()
-    assert not validation_service.get_validation_errors()
 
-def test_validate_field_no_rules(validation_service, mock_rule_loader):
-    """Test field validation with no rules."""
-    mock_rule_loader.get_field_rules.return_value = None
+def test_load_validation_rules(validation_service, valid_config):
+    """Test validation rules loading."""
+    rules = validation_service._rules
     
-    assert validation_service.validate_field('unknown_field', 'value')
-    assert not validation_service.get_validation_errors()
+    assert 'string' in rules
+    assert 'number' in rules
+    assert len(rules['string']) == 2  # pattern and length rules
+    assert len(rules['number']) == 1  # range rule
+    
+    # Verify rule structure
+    string_rules = rules['string']
+    assert any(r['type'] == 'pattern' for r in string_rules)
+    assert any(r['type'] == 'length' for r in string_rules)
 
-def test_validate_required_field_empty(validation_service, mock_adapter):
-    """Test validation of empty required field."""
-    validation_service.register_adapter('test_field', mock_adapter)
-    
-    assert not validation_service.validate_field('test_field', '')
-    errors = validation_service.get_validation_errors()
-    assert len(errors) == 1
-    assert "Required field" in errors[0]
 
-def test_validation_with_context(validation_service, mock_adapter):
-    """Test validation with context data."""
-    validation_service.register_adapter('test_field', mock_adapter)
-    context = {'user': 'test_user'}
+def test_initialize_dependencies(validation_service, valid_config):
+    """Test dependency initialization."""
+    deps = validation_service._dependencies
     
-    validation_service.validate_field('test_field', 'value', context)
-    mock_adapter.validate.assert_called_with('value', {'type': 'string', 'required': True, 'min_length': 3}, context)
+    assert 'end_date' in deps
+    assert 'sub_amount' in deps
+    assert 'start_date' in deps['end_date']
+    assert 'total_amount' in deps['sub_amount']
 
-def test_validation_caching(validation_service, mock_adapter):
-    """Test validation result caching."""
-    validation_service.register_adapter('test_field', mock_adapter)
-    
-    # First validation - should miss cache
-    validation_service.validate_field('test_field', 'value')
-    initial_stats = validation_service.get_validation_stats()
-    
-    # Second validation - should hit cache
-    validation_service.validate_field('test_field', 'value')
-    final_stats = validation_service.get_validation_stats()
-    
-    assert final_stats['cache_hits'] == initial_stats['cache_hits'] + 1
-    assert final_stats['cache_misses'] == initial_stats['cache_misses']
 
-def test_rule_caching(validation_service, mock_rule_loader):
-    """Test validation rule caching."""
-    # First call should query loader
-    validation_service._get_field_rules('test_field')
-    mock_rule_loader.get_field_rules.assert_called_once()
+def test_get_field_type(validation_service):
+    """Test field type determination."""
+    # Direct match
+    assert validation_service._get_field_type('name') == 'string'
+    assert validation_service._get_field_type('amount') == 'number'
     
-    # Second call should use cache
-    validation_service._get_field_rules('test_field')
-    mock_rule_loader.get_field_rules.assert_called_once()
+    # Pattern match
+    assert validation_service._get_field_type('code_123') == 'string'
+    assert validation_service._get_field_type('code_abc') == 'string'
+    
+    # No match
+    assert validation_service._get_field_type('unknown_field') is None
 
-def test_adapter_error_handling(validation_service, mock_adapter):
-    """Test adapter error handling."""
-    mock_adapter.validate.side_effect = Exception('Validation error')
-    validation_service.register_adapter('test_field', mock_adapter)
-    
-    assert not validation_service.validate_field('test_field', 'value')
-    errors = validation_service.get_validation_errors()
-    assert len(errors) == 1
-    assert 'Validation error' in errors[0]
 
-def test_required_field_tracking(validation_service, mock_adapter):
-    """Test required field tracking."""
-    validation_service.register_adapter('required_field', mock_adapter)
-    validation_service.validate_field('required_field', 'value')
+def test_validate_entity_success(validation_service):
+    """Test successful entity validation."""
+    data = {
+        'name': 'test',
+        'amount': 500
+    }
     
-    stats = validation_service.get_validation_stats()
-    assert stats['required_fields'] == 1
+    assert validation_service.validate_entity('test_entity', data) is True
+    assert len(validation_service.get_validation_errors()) == 0
 
-def test_clear_caches(validation_service, mock_adapter):
-    """Test clearing all validation caches."""
-    validation_service.register_adapter('test_field', mock_adapter)
-    
-    # Add some data to caches
-    validation_service.validate_field('test_field', 'value')
-    validation_service._get_field_rules('test_field')
-    
-    validation_service.clear_caches()
-    
-    assert len(validation_service._rule_cache) == 0
-    assert len(validation_service._required_fields) == 0
-    assert len(validation_service.validation_cache) == 0
 
-def test_validation_with_different_contexts(validation_service, mock_adapter):
-    """Test validation with different contexts."""
-    validation_service.register_adapter('test_field', mock_adapter)
+def test_validate_entity_failure(validation_service, mock_mediator):
+    """Test entity validation failure."""
+    # Configure mediator to fail validation
+    mock_mediator._should_validate = False
     
-    context1 = {'user': 'user1'}
-    context2 = {'user': 'user2'}
-    
-    validation_service.validate_field('test_field', 'value', context1)
-    validation_service.validate_field('test_field', 'value', context2)
-    
-    stats = validation_service.get_validation_stats()
-    assert stats['cache_misses'] == 2  # Different contexts should be cached separately
+    data = {'name': 'test'}
+    assert validation_service.validate_entity('test_entity', data) is False
+    assert len(validation_service.get_validation_errors()) > 0
 
-def test_extended_validation_stats(validation_service, mock_adapter):
-    """Test extended validation statistics."""
-    validation_service.register_adapter('test_field', mock_adapter)
-    
-    # Generate some validation activity
-    validation_service.validate_field('test_field', 'value1')
-    validation_service.validate_field('test_field', 'value1')  # Cache hit
-    validation_service.validate_field('test_field', 'value2')  # Different value
-    
-    stats = validation_service.get_validation_stats()
-    assert 'required_fields' in stats
-    assert 'rule_cache_size' in stats
-    assert 'cache_hits' in stats
-    assert 'cache_misses' in stats
-    assert 'validated_fields' in stats
-    assert 'error_count' in stats
 
-def test_rule_loader_error_handling(validation_service, mock_rule_loader):
-    """Test handling of rule loader errors."""
-    mock_rule_loader.get_field_rules.side_effect = Exception('Rule loading failed')
+def test_dependency_validation(validation_service):
+    """Test validation with dependencies."""
+    # Test valid dependency chain
+    data = {
+        'start_date': '2024-01-01',
+        'end_date': '2024-12-31',
+        'total_amount': 1000,
+        'sub_amount': 500
+    }
+    context = {'record': data}
     
-    # Should not raise exception, but return None for rules
-    rules = validation_service._get_field_rules('test_field')
-    assert rules is None
+    assert validation_service.validate_field('end_date', data['end_date'], context) is True
+    assert validation_service.validate_field('sub_amount', data['sub_amount'], context) is True
+    
+    # Test invalid dependency (missing field)
+    data = {'end_date': '2024-12-31'}  # Missing start_date
+    context = {'record': data}
+    
+    assert validation_service.validate_field('end_date', data['end_date'], context) is False
+    assert any('missing' in err.lower() for err in validation_service.get_validation_errors())
+
+
+def test_apply_rules_success(validation_service):
+    """Test successful rule application."""
+    # Test string validation
+    value = "TestString"
+    rules = validation_service._rules['string']
+    assert validation_service._apply_rules(value, rules) is True
+    
+    # Test number validation
+    value = 500
+    rules = validation_service._rules['number']
+    assert validation_service._apply_rules(value, rules) is True
+
+
+def test_apply_rules_failure(validation_service):
+    """Test rule application failure."""
+    # Test invalid string (contains numbers)
+    value = "Test123"
+    rules = validation_service._rules['string']
+    assert validation_service._apply_rules(value, rules) is False
+    assert len(validation_service.get_validation_errors()) > 0
+    
+    # Test invalid number (out of range)
+    value = 1500
+    rules = validation_service._rules['number']
+    assert validation_service._apply_rules(value, rules) is False
+    assert len(validation_service.get_validation_errors()) > 0
+
+
+def test_validate_field_with_context(validation_service):
+    """Test field validation with context."""
+    # Test with entity type context
+    context = {'entity_type': 'test_entity'}
+    assert validation_service.validate_field('name', 'TestValue', context) is True
+    
+    # Test with record context
+    context = {
+        'entity_type': 'test_entity',
+        'record': {'name': 'TestValue', 'related_field': 'Value'}
+    }
+    assert validation_service.validate_field('name', 'TestValue', context) is True
+
+
+def test_error_handling(validation_service, mock_mediator):
+    """Test error handling during validation."""
+    # Test mediator error handling
+    with patch.object(mock_mediator, 'validate_field', side_effect=Exception("Validation error")):
+        assert validation_service.validate_field('test_field', 'value') is False
+        assert any('validation error' in err.lower() for err in validation_service.get_validation_errors())
+    
+    # Test rule application error
+    with patch.object(validation_service, '_apply_rules', side_effect=Exception("Rule error")):
+        assert validation_service.validate_field('test_field', 'value') is False
+        assert any('rule error' in err.lower() for err in validation_service.get_validation_errors())

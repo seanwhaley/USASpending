@@ -1,5 +1,5 @@
 """Entity storage system for persisting entities."""
-from typing import Dict, Any, List, Optional, TypeVar, Generic, Iterator, Iterable
+from typing import Dict, Any, List, Optional, TypeVar, Generic, Iterator, Iterable, Set
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 import json
@@ -38,7 +38,7 @@ class SQLiteEntityStore(IEntityStore[T]):
         self._pool_size = 1
         self._timeout_seconds = 30
         self._init_db()
-        
+
     def configure_connection_pool(self, pool_size: int = 1, timeout_seconds: int = 30, journal_mode: str = 'WAL') -> None:
         """Configure the connection pool settings.
         
@@ -87,32 +87,52 @@ class SQLiteEntityStore(IEntityStore[T]):
     def _get_connection(self):
         """Get a connection from the pool."""
         if not self._pool:
-            # No pool configured, use basic connection
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
+            # No pool configured, use basic connection with auto-cleanup
+            conn = self._create_connection()
             try:
                 yield conn
             finally:
-                conn.close()
+                try:
+                    conn.close()
+                except Exception:
+                    pass
             return
-            
-        # Get connection from pool
+
+        # Get connection from pool with timeout
         conn_id = None
+        start_time = time.time()
         try:
-            with self._pool_lock:
-                while not self._available_conns:
-                    self._pool_lock.release()
-                    time.sleep(0.1)  # Wait for available connection
-                    self._pool_lock.acquire()
-                conn_id = self._available_conns.pop()
-                conn = self._pool[conn_id]
-                
-            yield conn
-            
-        finally:
+            while True:
+                with self._pool_lock:
+                    if self._available_conns:
+                        conn_id = self._available_conns.pop()
+                        conn = self._pool[conn_id]
+                        break
+                    
+                    if time.time() - start_time > self._timeout_seconds:
+                        raise TimeoutError("Timed out waiting for available connection")
+                        
+                    time.sleep(0.1)  # Short sleep before retry
+
+            try:
+                yield conn
+            finally:
+                if conn_id is not None:
+                    with self._pool_lock:
+                        # Return connection to pool
+                        self._available_conns.append(conn_id)
+                        
+        except Exception as e:
+            logger.error(f"Error managing connection: {str(e)}")
+            # Attempt to recreate failed connection
             if conn_id is not None:
                 with self._pool_lock:
-                    self._available_conns.append(conn_id)
+                    try:
+                        self._pool[conn_id] = self._create_connection()
+                        self._available_conns.append(conn_id)
+                    except Exception as e2:
+                        logger.error(f"Failed to recreate connection {conn_id}: {str(e2)}")
+            raise
     
     def close(self) -> None:
         """Close all connections in the pool."""
@@ -120,9 +140,10 @@ class SQLiteEntityStore(IEntityStore[T]):
             with self._lock:
                 for conn in self._pool:
                     try:
+                        conn.execute("PRAGMA optimize")  # Optimize before closing
                         conn.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error(f"Error closing connection: {str(e)}")
                 self._pool = None
                 self._available_conns = []
 
@@ -234,43 +255,38 @@ class FileSystemEntityStore(IEntityStore[T]):
     """File system-based entity storage implementation."""
     
     def __init__(self, base_path: str, factory: IEntityFactory, max_files_per_dir: int = 1000, compression: bool = True):
-        """Initialize store with base path and entity factory.
-        
-        Args:
-            base_path: Base directory path for entity storage
-            factory: Factory for creating entity instances
-            max_files_per_dir: Maximum number of files per subdirectory
-            compression: Whether to use gzip compression
-        """
+        """Initialize store with base path and entity factory."""
         self.base_path = pathlib.Path(base_path)
         self.factory = factory
         self.max_files_per_dir = max_files_per_dir
         self.compression = compression
         self._lock = threading.RLock()
         self._type_counts: Dict[str, int] = {}
+        self._active_writes: Set[str] = set()  # Track active write operations
+        self._cleanup_thread = ThreadPoolExecutor(max_workers=1)
         self._ensure_base_dir()
         
-        # Log the base directory path to verify it's correct
         logger.info(f"Entity store initialized with base path: {os.path.abspath(self.base_path)}")
     
     def _ensure_base_dir(self) -> None:
         """Ensure base directory exists."""
         try:
             os.makedirs(self.base_path, exist_ok=True)
-            # Verify directory exists after creation
+            # Verify directory exists and is writable
             if not os.path.exists(self.base_path):
-                logger.error(f"Failed to create base directory: {self.base_path}")
-            else:
-                # Test write permissions
-                test_file = self.base_path / "write_test.tmp"
-                try:
-                    with open(test_file, 'w') as f:
-                        f.write("test")
-                    os.remove(test_file)
-                except Exception as e:
-                    logger.error(f"Base directory exists but is not writable: {self.base_path}: {str(e)}")
+                raise IOError(f"Failed to create base directory: {self.base_path}")
+            
+            # Test write permissions with error details
+            test_file = self.base_path / "write_test.tmp"
+            try:
+                with open(test_file, 'w') as f:
+                    f.write("test")
+                os.remove(test_file)
+            except Exception as e:
+                raise IOError(f"Base directory exists but is not writable: {self.base_path}: {str(e)}")
         except Exception as e:
-            logger.error(f"Error creating base directory: {self.base_path}: {str(e)}")
+            logger.error(f"Critical error initializing storage: {str(e)}")
+            raise
     
     def _get_type_dir(self, entity_type: str, create: bool = True) -> pathlib.Path:
         """Get directory path for entity type."""
@@ -313,55 +329,81 @@ class FileSystemEntityStore(IEntityStore[T]):
     def save(self, entity_type: str, entity: T) -> str:
         """Save entity and return its ID."""
         with self._lock:
-            # Convert entity to dictionary
-            if hasattr(entity, '__dict__'):
-                data = entity.__dict__
-            elif hasattr(entity, '_asdict'):
-                data = entity._asdict()
-            else:
-                data = dict(entity)
+            # Convert entity to dictionary with error handling
+            try:
+                if hasattr(entity, '__dict__'):
+                    data = entity.__dict__
+                elif hasattr(entity, '_asdict'):
+                    data = entity._asdict()
+                else:
+                    data = dict(entity)
+            except Exception as e:
+                logger.error(f"Failed to convert entity to dictionary: {str(e)}")
+                raise ValueError("Entity must be convertible to dictionary")
                 
-            # Generate ID if not present
+            # Generate and validate ID
             entity_id = data.get('id') or self._generate_id(entity_type)
+            if not isinstance(entity_id, str):
+                raise ValueError(f"Entity ID must be string, got {type(entity_id)}")
             data['id'] = entity_id
             
-            # Add metadata
+            # Add metadata with timestamps
             current_time = datetime.utcnow().isoformat()
             data['_metadata'] = {
                 'created_at': current_time,
                 'updated_at': current_time,
-                'entity_type': entity_type
+                'entity_type': entity_type,
+                'compression': self.compression
             }
             
-            # Get file path and ensure parent directory exists
+            # Get file path and track write operation
             file_path = self._get_entity_path(entity_type, entity_id)
+            write_key = f"{entity_type}:{entity_id}"
             
-            # Write entity data
+            if write_key in self._active_writes:
+                logger.warning(f"Concurrent write detected for {write_key}")
+                raise RuntimeError(f"Entity {write_key} is already being written")
+            
+            self._active_writes.add(write_key)
+            
             try:
-                # Prepare JSON content before opening file
+                # Prepare JSON content
                 json_content = json.dumps(data, indent=2)
                 
-                # Ensure parent directory exists again right before writing
-                os.makedirs(file_path.parent, exist_ok=True)
+                # Create a temporary file first
+                temp_path = file_path.with_suffix('.tmp')
+                try:
+                    if self.compression:
+                        with gzip.open(temp_path, 'wt', encoding='utf-8') as f:
+                            f.write(json_content)
+                    else:
+                        with open(temp_path, 'w', encoding='utf-8') as f:
+                            f.write(json_content)
+                            
+                    # Atomic rename
+                    os.replace(temp_path, file_path)
+                    
+                except Exception:
+                    # Cleanup temp file on error
+                    if os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except:
+                            pass
+                    raise
                 
-                if self.compression:
-                    with gzip.open(file_path, 'wt', encoding='utf-8') as f:
-                        f.write(json_content)
-                else:
-                    with open(file_path, 'w', encoding='utf-8') as f:
-                        f.write(json_content)
-                        
-                # Update type counts cache
-                self._type_counts[entity_type] = -1  # Invalidate count
+                # Invalidate type count and schedule cleanup
+                self._type_counts[entity_type] = -1
+                self._cleanup_thread.submit(self._cleanup_empty_dirs)
                 
-                # Log successful entity save
-                logger.debug(f"Successfully saved entity {entity_type}/{entity_id} to {file_path}")
-                
+                logger.debug(f"Successfully saved entity {entity_type}/{entity_id}")
                 return entity_id
                 
             except Exception as e:
-                logger.error(f"Error saving entity {entity_id} to {file_path}: {str(e)}")
+                logger.error(f"Failed to save entity {entity_id}: {str(e)}")
                 raise
+            finally:
+                self._active_writes.remove(write_key)
     
     def get(self, entity_type: str, entity_id: str) -> Optional[T]:
         """Get entity by ID."""

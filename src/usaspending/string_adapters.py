@@ -2,10 +2,10 @@
 from typing import Dict, Any, List, Optional, Pattern
 import re
 
-from .schema_adapters import PydanticAdapter, SchemaAdapterFactory, AdapterTransform
+from .schema_adapters import BaseSchemaAdapter, SchemaAdapterFactory, AdapterTransform
 from .interfaces import ISchemaAdapter
 
-class StringFieldAdapter(ISchemaAdapter):
+class StringFieldAdapter(BaseSchemaAdapter):
     """Adapter for string field validation and transformation.
     
     Provides extended functionality for string fields beyond basic validation.
@@ -27,6 +27,7 @@ class StringFieldAdapter(ISchemaAdapter):
             case_sensitive: Whether validation is case sensitive
             trim_whitespace: Whether to trim whitespace during transform
         """
+        super().__init__()
         self.min_length = min_length
         self.max_length = max_length
         self.pattern = pattern
@@ -34,9 +35,8 @@ class StringFieldAdapter(ISchemaAdapter):
         self.strip = strip
         self.case_sensitive = case_sensitive
         self.trim_whitespace = trim_whitespace
-        self.errors: List[str] = []
     
-    def validate(self, value: Any, field_name: str) -> bool:
+    def validate_field(self, value: Any, field_name: str = "") -> bool:
         """Validate string value against configured rules.
         
         Args:
@@ -46,7 +46,7 @@ class StringFieldAdapter(ISchemaAdapter):
         Returns:
             Boolean indicating validation success
         """
-        self.errors = []
+        self.errors.clear()
         
         if value is None:
             return True
@@ -86,7 +86,7 @@ class StringFieldAdapter(ISchemaAdapter):
             
         return True
     
-    def transform(self, value: Any, field_name: str) -> Optional[str]:
+    def transform_field(self, value: Any, field_name: str = "") -> Any:
         """Transform value to appropriate string format.
         
         Args:
@@ -104,12 +104,5 @@ class StringFieldAdapter(ISchemaAdapter):
         if self.trim_whitespace:
             result = result.strip()
             
-        return result
-    
-    def get_validation_errors(self) -> List[str]:
-        """Get validation error messages.
-        
-        Returns:
-            List of validation error messages
-        """
-        return self.errors.copy()
+        # Apply registered transformers if any
+        return self.apply_transformers(result)

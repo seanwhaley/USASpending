@@ -1,11 +1,18 @@
 #!/usr/bin/env pwsh
 
+# Set PYTHONPATH for the current session
+#$env:PYTHONPATH = "src;tools"
+
+# Set PYTHONPATH permanently at machine level (requires administrator privileges)
+# Uncomment the following line if you want to set it permanently
+# [System.Environment]::SetEnvironmentVariable("PYTHONPATH", "src;tools", [System.EnvironmentVariableTarget]::Machine)
+
 # Stop on first error
 $ErrorActionPreference = "Stop"
 
 # Configuration
 $VENV_NAME = ".venv"
-$PYTHON_VERSION = "3.9"
+$PYTHON_VERSION = "3.13"
 $REQUIREMENTS_FILE = "requirements.txt"
 $DEV_REQUIREMENTS_FILE = "requirements-dev.txt"
 

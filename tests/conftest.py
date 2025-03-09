@@ -293,3 +293,287 @@ def date_adapter():
 def composite_adapter():
     """Create composite adapter for testing."""
     return CompositeFieldAdapter('test_field', [str.strip, str.upper])
+
+"""Shared test fixtures and mock classes."""
+import pytest
+from typing import Dict, Any, Optional, List, Protocol
+from unittest.mock import Mock
+
+from usaspending.interfaces import (
+    IConfigurationProvider, IValidationMediator, IEntityFactory, 
+    IEntityStore, ISchemaAdapter, IFieldValidator, IValidatable
+)
+
+
+class MockConfigProvider(IConfigurationProvider):
+    """Mock configuration provider for testing."""
+    
+    def __init__(self, config: Dict[str, Any]) -> None:
+        self._config = config
+        self._errors: List[str] = []
+    
+    def get_config(self, section: Optional[str] = None) -> Dict[str, Any]:
+        if not section:
+            return self._config
+        return self._config.get(section, {})
+    
+    def get_validation_errors(self) -> List[str]:
+        return self._errors.copy()
+    
+    def validate_config(self) -> bool:
+        return True
+
+
+class MockValidationMediator(IValidationMediator):
+    """Mock validation mediator for testing."""
+    
+    def __init__(self, should_validate: bool = True) -> None:
+        self._should_validate = should_validate
+        self._errors: List[str] = []
+        self._last_context: Optional[Dict[str, Any]] = None
+    
+    def validate_entity(self, entity_type: str, data: Dict[str, Any]) -> bool:
+        if not self._should_validate:
+            self._errors.append(f"Entity validation failed for {entity_type}")
+            return False
+        return True
+    
+    def validate_field(self, field_name: str, value: Any, entity_type: Optional[str] = None) -> bool:
+        self._last_context = {'field': field_name, 'value': value, 'entity_type': entity_type}
+        if not self._should_validate:
+            self._errors.append(f"Field validation failed for {field_name}")
+            return False
+        return True
+    
+    def get_validation_errors(self) -> List[str]:
+        return self._errors.copy()
+
+
+class MockEntityFactory(IEntityFactory):
+    """Mock entity factory for testing."""
+    
+    def __init__(self, should_create: bool = True) -> None:
+        self._should_create = should_create
+        self._created_entities = {}
+        
+    def create_entity(self, entity_type: str, data: Dict[str, Any]) -> Optional[Any]:
+        if not self._should_create:
+            return None
+            
+        entity = Mock()
+        entity.entity_type = entity_type
+        entity.data = data
+        self._created_entities[entity_type] = entity
+        return entity
+        
+    def get_entity_types(self) -> list[str]:
+        return list(self._created_entities.keys())
+
+
+class MockEntityStore(IEntityStore):
+    """Mock entity store for testing."""
+    
+    def __init__(self, should_save: bool = True) -> None:
+        self._should_save = should_save
+        self._entities = {}
+        
+    def save(self, entity_type: str, entity: Any) -> str:
+        if not self._should_save:
+            return ""
+            
+        entity_id = f"{entity_type}-{len(self._entities) + 1}"
+        self._entities[entity_id] = (entity_type, entity)
+        return entity_id
+        
+    def get(self, entity_type: str, entity_id: str) -> Optional[Any]:
+        if (entity_type, entity_id) in self._entities:
+            return self._entities[entity_id][1]
+        return None
+        
+    def delete(self, entity_type: str, entity_id: str) -> bool:
+        if (entity_type, entity_id) in self._entities:
+            del self._entities[entity_id]
+            return True
+        return False
+        
+    def list(self, entity_type: str):
+        return (entity for _, (t, entity) in self._entities.items() if t == entity_type)
+        
+    def count(self, entity_type: str) -> int:
+        return sum(1 for _, (t, _) in self._entities.items() if t == entity_type)
+
+
+class MockSchemaAdapter(ISchemaAdapter):
+    """Mock schema adapter for testing."""
+    
+    def __init__(self, should_validate: bool = True) -> None:
+        self._should_validate = should_validate
+        self._errors: List[str] = []
+    
+    def validate(self, value: Any, rules: Dict[str, Any],
+                validation_context: Optional[Dict[str, Any]] = None) -> bool:
+        if not self._should_validate:
+            self._errors.append("Validation failed")
+            return False
+        return True
+    
+    def transform(self, value: Any) -> Any:
+        return value
+    
+    def get_errors(self) -> List[str]:
+        return self._errors
+
+
+class MockFieldValidator(IFieldValidator):
+    """Mock field validator for testing."""
+    
+    def __init__(self) -> None:
+        self.errors: List[str] = []
+    
+    def validate_field(self, field_name: str, value: Any, 
+                      validation_context: Optional[Dict[str, Any]] = None) -> bool:
+        if value == 'invalid':
+            self.errors.append(f"Invalid value for {field_name}")
+            return False
+        return True
+    
+    def get_validation_errors(self) -> List[str]:
+        return self.errors
+
+
+class MockValidatable(IValidatable):
+    """Mock validatable entity for testing."""
+    
+    def __init__(self, should_validate: bool = True) -> None:
+        self._should_validate = should_validate
+        self._errors: List[str] = []
+    
+    def validate(self) -> bool:
+        if not self._should_validate:
+            self._errors.append("Validation failed")
+            return False
+        return True
+    
+    def get_validation_errors(self) -> List[str]:
+        return self._errors
+
+
+# Common fixtures
+@pytest.fixture
+def valid_config() -> Dict[str, Any]:
+    """Create valid test configuration."""
+    return {
+        'validation_types': {
+            'string': [
+                {'type': 'pattern', 'pattern': '[A-Za-z0-9\\s]+'},
+                {'type': 'length', 'min': 1, 'max': 100}
+            ],
+            'number': [
+                {'type': 'range', 'min': 0, 'max': 1000000}
+            ],
+            'date': [
+                {'type': 'date', 'format': '%Y-%m-%d'}
+            ],
+            'code': [
+                {'type': 'pattern', 'pattern': '[A-Z0-9]+'},
+                {'type': 'length', 'min': 2, 'max': 10}
+            ]
+        },
+        'field_types': {
+            'name': 'string',
+            'amount': 'number',
+            'code_*': 'string',
+            'contract_number': 'code',
+            'award_amount': 'number',
+            'award_date': 'date',
+            'description': 'string',
+            'agency_code': 'code',
+            'vendor_name': 'string',
+            '*_amount': 'number',
+            '*_date': 'date'
+        },
+        'field_dependencies': {
+            'end_date': {
+                'fields': ['start_date'],
+                'validation': {
+                    'type': 'date_range',
+                    'min_field': 'start_date'
+                }
+            },
+            'sub_amount': {
+                'fields': ['total_amount'],
+                'validation': {
+                    'type': 'range',
+                    'max_field': 'total_amount'
+                }
+            }
+        },
+        'entities': {
+            'test_entity': {
+                'field_mappings': {
+                    'direct': {
+                        'id': 'source_id',
+                        'name': 'source_name'
+                    }
+                }
+            },
+            'contract': {
+                'key_fields': ['contract_number'],
+                'required_fields': ['contract_number', 'award_amount', 'award_date'],
+                'field_mappings': {
+                    'direct': {
+                        'id': 'contract_number',
+                        'amount': 'award_amount',
+                        'date': 'award_date',
+                        'description': 'description'
+                    }
+                }
+            },
+            'agency': {
+                'key_fields': ['agency_code'],
+                'required_fields': ['agency_code', 'agency_name'],
+                'field_mappings': {
+                    'direct': {
+                        'id': 'agency_code',
+                        'name': 'agency_name'
+                    }
+                }
+            }
+        }
+    }
+
+
+@pytest.fixture
+def mock_config_provider(valid_config: Dict[str, Any]) -> MockConfigProvider:
+    """Create configuration provider mock."""
+    return MockConfigProvider(valid_config)
+
+
+@pytest.fixture
+def mock_validation_mediator() -> MockValidationMediator:
+    """Create validation mediator mock."""
+    return MockValidationMediator()
+
+
+@pytest.fixture
+def mock_entity_factory() -> MockEntityFactory:
+    """Create entity factory mock."""
+    return MockEntityFactory()
+
+
+@pytest.fixture
+def mock_entity_store() -> MockEntityStore:
+    """Create entity store mock."""
+    return MockEntityStore()
+
+
+@pytest.fixture
+def mock_field_validator() -> MockFieldValidator:
+    """Create field validator mock."""
+    return MockFieldValidator()
+
+
+@pytest.fixture
+def mock_schema_adapter() -> MockSchemaAdapter:
+    """Create schema adapter mock."""
+    return MockSchemaAdapter()

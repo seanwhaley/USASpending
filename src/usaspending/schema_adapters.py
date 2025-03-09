@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 
 from . import get_logger
 from .interfaces import ISchemaAdapter
+from .component_utils import implements
 
 logger = get_logger(__name__)
 
@@ -30,8 +31,8 @@ class AdapterTransform:
             'pad_left': lambda x: str(x).zfill(self.config.get('length', 5)),
             'truncate': lambda x: str(x)[:self.config.get('length', 3)],
             'normalize_whitespace': lambda x: ' '.join(str(x).split()),
-            'split': lambda x: str(x).split(self.config),
-            'get_index': lambda x: x[self.config] if isinstance(x, (list, tuple)) else None,
+            'split': lambda x: str(x).split(self.config.get('separator', ' ') if isinstance(self.config.get('separator'), str) else None),
+            'get_index': lambda x: x[int(self.config.get('index', 0))] if isinstance(x, (list, tuple)) else None,
             'to_int': lambda x: int(x) if str(x).isdigit() else None,
             'to_isoformat': lambda x: x.isoformat() if hasattr(x, 'isoformat') else str(x)
         }
@@ -46,41 +47,156 @@ class AdapterTransform:
             logger.warning(f"Transform {self.type} failed for value {value}: {str(e)}")
             return None
 
-class AdapterError(Exception):
-    """Base class for adapter errors."""
-    pass
 
-class BaseSchemaAdapter(ISchemaAdapter):
-    """Base class for schema adapters."""
+class AdapterError(Exception):
+    """Base class for adapter errors.
     
-    def __init__(self):
-        """Initialize adapter."""
+    Provides structured error handling for schema adapters with support
+    for field context and validation details.
+    """
+    
+    def __init__(self, message: str, field_name: str = "", 
+                 details: Optional[Dict[str, Any]] = None) -> None:
+        """Initialize adapter error.
+        
+        Args:
+            message: Error message
+            field_name: Name of the field that caused the error
+            details: Additional error context
+        """
+        self.field_name = field_name
+        self.details = details or {}
+        formatted_message = f"Field '{field_name}': {message}" if field_name else message
+        super().__init__(formatted_message)
+
+    def add_context(self, **kwargs: Any) -> 'AdapterError':
+        """Add additional context to error details.
+        
+        Args:
+            **kwargs: Key-value pairs to add to details
+            
+        Returns:
+            Self for method chaining
+        """
+        self.details.update(kwargs)
+        return self
+
+@implements(ISchemaAdapter)
+class BaseSchemaAdapter(ISchemaAdapter):
+    """Base class for schema adapters.
+    
+    This class provides a standardized implementation of the ISchemaAdapter interface
+    and defines the common behavior for all schema adapters.
+    """
+    
+    def __init__(self) -> None:
+        """Initialize adapter with an empty errors list."""
         self.errors: List[str] = []
+        self._transformers: List[Callable] = []
         
     def validate(self, value: Any, rules: Dict[str, Any],
                 validation_context: Optional[Dict[str, Any]] = None) -> bool:
-        """Validate a value against schema rules."""
-        return self.validate_field(value)
+        """Validate a value against schema rules.
+        
+        Args:
+            value: Value to validate
+            rules: Validation rules
+            validation_context: Optional context for validation
+            
+        Returns:
+            Boolean indicating validation success
+        """
+        # By default, use the validate_field method with just the value
+        field_name = rules.get('field_name', '')
+        return self.validate_field(value, field_name)
         
     def transform(self, value: Any) -> Any:
-        """Transform a value according to schema rules."""
+        """Transform a value according to schema rules.
+        
+        Args:
+            value: Value to transform
+            
+        Returns:
+            Transformed value
+        """
+        # By default, use the transform_field method with no field name
         return self.transform_field(value)
         
     def get_errors(self) -> List[str]:
-        """Get validation/transformation errors."""
+        """Get validation/transformation errors.
+        
+        Returns:
+            List of error messages
+        """
         return self.errors.copy()
 
+    @abstractmethod
     def validate_field(self, value: Any, field_name: str = "") -> bool:
-        """Validate field value."""
+        """Validate field value.
+        
+        Args:
+            value: Value to validate
+            field_name: Field name for error messages
+            
+        Returns:
+            Boolean indicating validation success
+        """
         raise NotImplementedError
         
+    @abstractmethod
     def transform_field(self, value: Any, field_name: str = "") -> Any:
-        """Transform field value."""
+        """Transform field value.
+        
+        Args:
+            value: Value to transform
+            field_name: Field name for context
+            
+        Returns:
+            Transformed value
+        """
         raise NotImplementedError
         
     def clear_cache(self) -> None:
-        """Clear any cached data."""
+        """Clear any cached data including errors.
+        
+        Returns:
+            None
+        """
         self.errors.clear()
+        
+    def add_transformer(self, transformer: Callable) -> None:
+        """Add a transformation function to the adapter.
+        
+        Args:
+            transformer: Function that transforms a value
+            
+        Returns:
+            None
+        """
+        self._transformers.append(transformer)
+        
+    def apply_transformers(self, value: Any) -> Any:
+        """Apply all registered transformers to a value.
+        
+        Args:
+            value: Value to transform
+            
+        Returns:
+            Transformed value or None if any transformation fails
+        """
+        if not self._transformers or value is None:
+            return value
+            
+        result = value
+        try:
+            for transformer in self._transformers:
+                result = transformer(result)
+                if result is None:
+                    return None
+            return result
+        except Exception as e:
+            logger.warning(f"Transformation failed: {str(e)}")
+            return None
 
 class StringAdapter(BaseSchemaAdapter):
     """Adapter for string fields."""
@@ -89,7 +205,7 @@ class StringAdapter(BaseSchemaAdapter):
                  max_length: Optional[int] = None,
                  pattern: Optional[str] = None,
                  strip: bool = True):
-        """Initialize string adapter."""
+        """Initialize string adapter.""" 
         super().__init__() 
         self.min_length = min_length
         self.max_length = max_length
@@ -166,24 +282,39 @@ class NumericAdapter(BaseSchemaAdapter):
         try:
             if self.decimal:
                 num_value = Decimal(str(value))
-            else:
-                num_value = float(value)
-                
-            if self.min_value is not None and num_value < self.min_value:
-                self.errors.append(f"Value {num_value} is less than minimum {self.min_value}")
-                return False
-                
-            if self.max_value is not None and num_value > self.max_value:
-                self.errors.append(f"Value {num_value} exceeds maximum {self.max_value}")
-                return False
-                
-            if self.precision is not None and self.decimal:
-                str_value = str(num_value)
-                if '.' in str_value:
-                    decimal_places = len(str_value.split('.')[1])
-                    if decimal_places > self.precision:
-                        self.errors.append(f"Decimal places {decimal_places} exceeds precision {self.precision}")
+                if self.min_value is not None:
+                    min_decimal = Decimal(str(self.min_value))
+                    if num_value < min_decimal:
+                        self.errors.append(f"Value {num_value} is less than minimum {min_decimal}")
                         return False
+                        
+                if self.max_value is not None:
+                    max_decimal = Decimal(str(self.max_value))
+                    if num_value > max_decimal:
+                        self.errors.append(f"Value {num_value} exceeds maximum {max_decimal}")
+                        return False
+                        
+                # Check decimal precision
+                if self.precision is not None:
+                    str_value = str(num_value)
+                    if '.' in str_value:
+                        decimal_places = len(str_value.split('.')[1])
+                        if decimal_places > self.precision:
+                            self.errors.append(f"Decimal places {decimal_places} exceeds precision {self.precision}")
+                            return False
+            else:
+                try:
+                    float_value = float(value)
+                    if self.min_value is not None and float_value < self.min_value:
+                        self.errors.append(f"Value {float_value} is less than minimum {self.min_value}")
+                        return False
+                        
+                    if self.max_value is not None and float_value > self.max_value:
+                        self.errors.append(f"Value {float_value} exceeds maximum {self.max_value}")
+                        return False
+                except (ValueError, TypeError):
+                    self.errors.append(f"Invalid numeric value: {value}")
+                    return False
                         
             return True
             
@@ -232,27 +363,21 @@ class DateAdapter(BaseSchemaAdapter):
             return True
             
         try:
-            # Handle datetime objects
-            if isinstance(value, datetime):
-                date_value = value.date()
-            elif isinstance(value, date):
-                date_value = value
-            else:
-                date_value = self._parse_date(str(value))
-                
-            if not date_value:
+            # Get parsed date value
+            parsed_date = self._get_date_value(value)
+            if parsed_date is None:
                 self.errors.append(f"Could not parse date from {value} using formats: {self.formats}")
                 return False
                 
-            if self.min_date and date_value < self.min_date:
+            if self.min_date and parsed_date < self.min_date:
                 self.errors.append(
-                    f"Date {date_value} is before minimum {self.min_date}"
+                    f"Date {parsed_date} is before minimum {self.min_date}"
                 )
                 return False
                 
-            if self.max_date and date_value > self.max_date:
+            if self.max_date and parsed_date > self.max_date:
                 self.errors.append(
-                    f"Date {date_value} is after maximum {self.max_date}"
+                    f"Date {parsed_date} is after maximum {self.max_date}"
                 )
                 return False
                 
@@ -267,18 +392,33 @@ class DateAdapter(BaseSchemaAdapter):
         if value is None:
             return None
             
-        if isinstance(value, datetime):
-            date_value = value.date()
-        elif isinstance(value, date):
-            date_value = value
-        else:
-            date_value = self._parse_date(str(value))
-            if not date_value:
+        try:
+            # Get parsed date value 
+            parsed_date = self._get_date_value(value)
+            if parsed_date is None:
                 return None
-                
-        if self.output_format:
-            return date_value.strftime(self.output_format)
-        return date_value
+                    
+            if self.output_format:
+                return parsed_date.strftime(self.output_format)
+            return parsed_date
+        except ValueError:
+            return None
+
+    def _get_date_value(self, value: Any) -> Optional[date]:
+        """Extract date value from input.
+        
+        Args:
+            value: Input value to convert to date
+            
+        Returns:
+            Parsed date or None if parsing failed
+        """
+        if isinstance(value, datetime):
+            return value.date()
+        elif isinstance(value, date):
+            return value
+        else:
+            return self._parse_date(str(value))
         
     def _parse_date(self, value: str) -> Optional[date]:
         """Parse date string using configured formats."""
@@ -390,7 +530,7 @@ class EnumAdapter(BaseSchemaAdapter):
 class ListAdapter(BaseSchemaAdapter):
     """Adapter for list fields."""
     
-    def __init__(self, item_adapter: ISchemaAdapter,
+    def __init__(self, item_adapter: BaseSchemaAdapter,
                  min_items: Optional[int] = None,
                  max_items: Optional[int] = None):
         """Initialize list adapter."""
@@ -449,7 +589,7 @@ class ListAdapter(BaseSchemaAdapter):
 class DictAdapter(BaseSchemaAdapter):
     """Adapter for dictionary fields."""
     
-    def __init__(self, field_adapters: Dict[str, ISchemaAdapter],
+    def __init__(self, field_adapters: Dict[str, BaseSchemaAdapter],
                  required_fields: Optional[List[str]] = None,
                  additional_fields: bool = True):
         """Initialize dictionary adapter."""
@@ -605,24 +745,81 @@ class CompositeFieldAdapter(BaseSchemaAdapter):
 
 class SchemaAdapterFactory:
     """Factory class for creating schema adapters."""
-    def create_adapter(self, adapter_type: str, **kwargs) -> BaseSchemaAdapter:
-        """Create and return an adapter based on the adapter type."""
-        if adapter_type == 'string':
-            return StringAdapter(**kwargs)
-        elif adapter_type == 'numeric':
-            return NumericAdapter(**kwargs)
-        elif adapter_type == 'date':
-            return DateAdapter(**kwargs)
-        elif adapter_type == 'boolean':
-            return BooleanAdapter(**kwargs)
-        elif adapter_type == 'enum':
-            return EnumAdapter(**kwargs)
-        elif adapter_type == 'list':
-            return ListAdapter(**kwargs)
-        elif adapter_type == 'dict':
-            return DictAdapter(**kwargs)
-        else:
-            raise ValueError(f"Unknown adapter type: {adapter_type}")
+    
+    _ADAPTER_TYPES = {
+        'string': (StringAdapter, {'min_length': Optional[int], 'max_length': Optional[int],
+                                 'pattern': Optional[str], 'strip': bool}),
+        'numeric': (NumericAdapter, {'min_value': Optional[float], 'max_value': Optional[float],
+                                   'precision': Optional[int], 'decimal': bool}),
+        'date': (DateAdapter, {'formats': List[str], 'min_date': Optional[date],
+                             'max_date': Optional[date], 'output_format': Optional[str]}),
+        'boolean': (BooleanAdapter, {}),
+        'enum': (EnumAdapter, {'field_name': str, 'enum_class': Type,
+                             'required': bool, 'case_sensitive': bool}),
+        'list': (ListAdapter, {'item_adapter': BaseSchemaAdapter,
+                             'min_items': Optional[int], 'max_items': Optional[int]}),
+        'dict': (DictAdapter, {'field_adapters': Dict[str, BaseSchemaAdapter],
+                             'required_fields': Optional[List[str]], 'additional_fields': bool})
+    }
+    
+    def create_adapter(self, adapter_type: str, **kwargs: Any) -> BaseSchemaAdapter:
+        """Create and return an adapter based on the adapter type.
+        
+        Args:
+            adapter_type: Type of adapter to create
+            **kwargs: Configuration parameters for the adapter
+            
+        Returns:
+            Configured adapter instance
+            
+        Raises:
+            AdapterError: If adapter_type is unknown or parameters are invalid
+        """
+        try:
+            if adapter_type not in self._ADAPTER_TYPES:
+                raise AdapterError(f"Unknown adapter type: {adapter_type}")
+                
+            adapter_class, param_types = self._ADAPTER_TYPES[adapter_type]
+            
+            # Validate parameter types where possible
+            for param, expected_type in param_types.items():
+                if param in kwargs:
+                    value = kwargs[param]
+                    # Handle Optional types
+                    if hasattr(expected_type, "__origin__") and expected_type.__origin__ is Union:
+                        if hasattr(expected_type, "__args__") and type(None) in expected_type.__args__:
+                            # Optional parameter - can be None or the specified type
+                            valid_types = tuple(t for t in expected_type.__args__ if t is not type(None))
+                            if value is not None:
+                                try:
+                                    if not isinstance(value, valid_types):
+                                        raise AdapterError(
+                                            f"Invalid type for parameter '{param}'. "
+                                            f"Expected {valid_types}, got {type(value)}"
+                                        )
+                                except TypeError:
+                                    # Skip validation for complex types
+                                    pass
+                    elif isinstance(expected_type, type):  # Only use isinstance with actual types
+                        try:
+                            if not isinstance(value, expected_type):
+                                raise AdapterError(
+                                    f"Invalid type for parameter '{param}'. "
+                                    f"Expected {expected_type}, got {type(value)}"
+                                )
+                        except TypeError:
+                            # Skip validation for complex types
+                            pass
+            
+            # Create the adapter instance
+            instance = adapter_class(**kwargs)
+            assert isinstance(instance, BaseSchemaAdapter)
+            return instance
+            
+        except Exception as e:
+            if not isinstance(e, AdapterError):
+                raise AdapterError(str(e)) from e
+            raise
 
 class FieldAdapter:
     """Base class for field-specific adapters."""

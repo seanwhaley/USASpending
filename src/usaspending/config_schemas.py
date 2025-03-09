@@ -1,8 +1,14 @@
 """Configuration schemas and defaults."""
 from typing import Dict, Any
+from dataclasses import dataclass
+from pathlib import Path
 import copy
+import yaml
+import jsonschema
+from pydantic import BaseModel, Field, ConfigDict
 
 from . import get_logger
+from .exceptions import ConfigurationError
 
 logger = get_logger(__name__)
 
@@ -59,7 +65,7 @@ CORE_SCHEMA = {
             "required": ["class", "config"]
         },
         "validation_service": {
-            "type": "object",
+            "type": "object", 
             "properties": {
                 "class": {"type": "string"},
                 "config": {
@@ -75,13 +81,6 @@ CORE_SCHEMA = {
                 }
             },
             "required": ["class"]
-        },
-        "transformer_factory": {
-            "type": "object",
-            "properties": {
-                "class": {"type": "string"},
-                "config": {"type": "object"}
-            }
         },
         "system": {
             "type": "object",
@@ -144,108 +143,9 @@ CORE_SCHEMA = {
                         }
                     },
                     "required": ["input", "output"]
-                },
-                "caching": {
-                    "type": "object",
-                    "properties": {
-                        "memory_size": {"type": "integer", "minimum": 1},
-                        "ttl_seconds": {"type": "integer", "minimum": 1},
-                        "file_fallback": {"type": "boolean"}
-                    }
-                }
-            },
-            "required": ["processing", "io"]
-        },
-        "validation_groups": {
-            "type": "object",
-            "patternProperties": {
-                "^[a-zA-Z_][a-zA-Z0-9_]*$": {
-                    "type": "object",
-                    "required": ["name", "rules"],
-                    "properties": {
-                        "name": {"type": "string"},
-                        "description": {"type": "string"},
-                        "enabled": {"type": "boolean"},
-                        "rules": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        },
-                        "dependencies": {
-                            "type": "array",
-                            "items": {"type": "string"}
-                        },
-                        "error_level": {
-                            "type": "string",
-                            "enum": ["error", "warning", "info"]
-                        }
-                    }
                 }
             }
         },
-        "field_properties": {
-            "type": "object",
-            "patternProperties": {
-                "^[a-zA-Z_][a-zA-Z0-9_]*$": {
-                    "type": "object",
-                    "properties": {
-                        "type": {"type": "string"},
-                        "validation": {
-                            "type": "object",
-                            "properties": {
-                                "format": {"type": "string"},
-                                "pattern": {"type": "string"},
-                                "min_value": {"type": ["number", "string"]},
-                                "max_value": {"type": ["number", "string"]},
-                                "precision": {"type": "integer"},
-                                "values": {
-                                    "type": "array",
-                                    "items": {"type": "string"}
-                                },
-                                "error_message": {"type": "string"},
-                                "groups": {
-                                    "type": "array",
-                                    "items": {"type": "string"}
-                                },
-                                "dependencies": {
-                                    "type": "array",
-                                    "items": {
-                                        "type": "object",
-                                        "required": ["type", "target_field"],
-                                        "properties": {
-                                            "type": {"enum": ["comparison", "required_field"]},
-                                            "target_field": {"type": "string"},
-                                            "validation_rule": {"type": "object"},
-                                            "error_message": {"type": "string"},
-                                            "error_level": {
-                                                "type": "string",
-                                                "enum": ["error", "warning", "info"]
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "logging": {
-            "type": "object",
-            "properties": {
-                "level": {"enum": ["DEBUG", "INFO", "WARNING", "ERROR"]},
-                "format": {"type": "string"},
-                "file": {"type": "string"}
-            }
-        }
-    },
-    "required": ["system"]
-}
-
-# Root schema includes any additional top-level configurations
-ROOT_CONFIG_SCHEMA = {
-    "type": "object",
-    "properties": {
-        **CORE_SCHEMA["properties"],
         "security": {
             "type": "object",
             "properties": {
@@ -274,89 +174,76 @@ ROOT_CONFIG_SCHEMA = {
                     }
                 }
             }
-        },
-        "data_dictionary": {
-            "type": "object",
-            "properties": {
-                "crosswalk": {
-                    "type": "object",
-                    "properties": {
-                        "input": {
-                            "type": "object",
-                            "properties": {
-                                "file": {"type": "string"},
-                                "required_columns": {
-                                    "type": "array",
-                                    "items": {"type": "string"}
-                                }
-                            }
-                        },
-                        "output": {
-                            "type": "object",
-                            "properties": {
-                                "file": {"type": "string"},
-                                "indent": {"type": "integer"},
-                                "ensure_ascii": {"type": "boolean"}
-                            }
-                        },
-                        "parsing": {
-                            "type": "object"
-                        },
-                        "mapping": {
-                            "type": "object"
-                        }
-                    }
-                }
-            }
-        },
-        "entities": {
-            "type": "object"
-        },
-        "documentation": {
-            "type": "object"
-        },
-        "relationships": {
-            "type": "array",
-            "items": {
-                "type": "object"
-            }
         }
     },
-    "required": ["system"]
+    "required": ["paths", "system"]
 }
 
-# Default component implementations to inject when not defined in config
-DEFAULT_ENTITY_FACTORY = {
-    "class": "usaspending.entity_factory.EntityFactory",
-    "config": {
-        "type_adapters": {
-            "string": "usaspending.schema_adapters.StringAdapter",
-            "integer": "usaspending.schema_adapters.IntegerAdapter",
-            "decimal": "usaspending.schema_adapters.DecimalAdapter",
-            "money": "usaspending.schema_adapters.MoneyAdapter",
-            "date": "usaspending.schema_adapters.DateAdapter",
-            "boolean": "usaspending.boolean_adapters.BooleanAdapter",
-            "enum": "usaspending.enum_adapters.EnumAdapter"
-        }
-    }
-}
+class ConfigLoader:
+    """Loads and validates configuration from files."""
+    
+    def __init__(self) -> None:
+        self.config: Dict[str, Any] = {}
+        
+    def load_config(self, config_path: Path) -> None:
+        """Load configuration from YAML file.
+        
+        Args:
+            config_path: Path to configuration file
+            
+        Raises:
+            ConfigurationError: If configuration is invalid
+        """
+        try:
+            with open(config_path) as f:
+                self.config = yaml.safe_load(f)
+            
+            jsonschema.validate(instance=self.config, schema=CORE_SCHEMA)
+            
+        except (yaml.YAMLError, jsonschema.exceptions.ValidationError) as e:
+            raise ConfigurationError(f"Invalid configuration: {str(e)}")
+            
+    def get_config(self) -> Dict[str, Any]:
+        """Get the loaded configuration.
+        
+        Returns:
+            The configuration dictionary
+        """
+        return copy.deepcopy(self.config)
 
-DEFAULT_ENTITY_STORE = {
-    "class": "usaspending.entity_store.FileSystemEntityStore",
-    "config": {
-        "storage_type": "filesystem",
-        "path": "output/entities",
-        "max_files_per_dir": 1000,
-        "compression": True
-    }
-}
+# Pydantic models for config validation
+class TransformOperation(BaseModel):
+    """Schema for transformation operations."""
+    operation: str
+    params: Dict[str, Any] = Field(default_factory=dict)
 
-DEFAULT_VALIDATION_SERVICE = {
-    "class": "usaspending.validation_service.ValidationService",
-    "config": {
-        "strict_mode": False,
-        "cache_size": 1000,
-        "parallel": True,
-        "max_errors": 100
-    }
-}
+class TransformationConfig(BaseModel):
+    """Schema for field transformation configuration."""
+    enabled: bool = True
+    operations: list[TransformOperation]
+
+class DependencyConfig(BaseModel):
+    """Schema for field dependency configuration."""
+    type: str
+    target_field: str
+    validation_rule: Dict[str, Any] = Field(default_factory=dict)
+    error_message: str = ""
+    error_level: str = "error"
+
+class ValidationGroup(BaseModel):
+    """Schema for validation group configuration."""
+    name: str
+    description: str = ""
+    enabled: bool = True
+    rules: list[str]
+    dependencies: list[str] = Field(default_factory=list)
+    error_level: str = "error"
+
+__all__ = [
+    'CORE_SCHEMA',
+    'ConfigLoader',
+    'TransformOperation',
+    'TransformationConfig', 
+    'DependencyConfig',
+    'ValidationGroup'
+]

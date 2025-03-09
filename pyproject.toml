@@ -9,7 +9,7 @@ authors = [
     { name = "USASpending Team" }
 ]
 description = "USASpending data processing tools"
-requires-python = ">=3.9"
+requires-python = ">=3.13.1"
 dynamic = ["dependencies", "optional-dependencies"]
 
 [tool.setuptools.dynamic]

@@ -1,32 +1,43 @@
-"""Entity mapping functionality for transforming data."""
-from typing import Dict, Any, Optional, List, Set, Union
-from dataclasses import dataclass
+"""Entity mapping functionality."""
+from typing import Dict, Any, Optional, List, Set
 import re
-from csv import DictReader
+import logging
 
-from . import get_logger, ConfigurationError
+from .interfaces import IEntityMapper, IValidationMediator, IConfigurationProvider
 from .validation_base import BaseValidator
-from .text_file_cache import TextFileCache
 from .exceptions import EntityMappingError
-from .interfaces import IEntityMapper
-from .schema_adapters import SchemaAdapterFactory
+from .component_utils import implements
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
-class EntityMapper(BaseValidator):
+@implements(IEntityMapper)
+class EntityMapper(BaseValidator, IEntityMapper):
     """Maps data between different entity formats."""
-    
-    def __init__(self, config: Dict[str, Any]):
-        """Initialize entity mapper with configuration."""
+
+    def __init__(self, 
+                 config_provider: IConfigurationProvider,
+                 validation_mediator: IValidationMediator):
+        """Initialize entity mapper.
+        
+        Args:
+            config_provider: Configuration provider instance
+            validation_mediator: Validation mediator instance
+        """
         super().__init__()
-        self._config = config
+        self._config_provider = config_provider
+        self._validation_mediator = validation_mediator
         self._mapping_cache: Dict[str, Dict[str, Any]] = {}
-        self._file_cache = TextFileCache()
         self._mapped_fields: Set[str] = set()
+        self._error_counts: Dict[str, int] = {}
+        self._cache_hits: int = 0
+        self._cache_misses: int = 0
         
         # Store entity definitions for quick lookup
-        self.entities = self._config.get('entities', {})
-        self.field_properties = self._config.get('field_properties', {})
+        self.entities = self._config_provider.get_config('entities')
+        if not self.entities:
+            raise ValueError("No entity definitions found in configuration")
+            
+        self.field_properties = self._config_provider.get_config('field_properties')
         
         # Create ordered list of entities by processing order
         self.entity_order = sorted(
@@ -36,7 +47,92 @@ class EntityMapper(BaseValidator):
         )
         
         logger.debug(f"Initialized EntityMapper with {len(self.entities)} entity definitions")
+
+    def map_entity(self, data: Any) -> Dict[str, Any]:
+        """Map data to entity format using configuration mappings."""
+        result = {}
+        self.errors.clear()
         
+        try:
+            # Convert input to dictionary format
+            data_dict = self._ensure_dict_data(data)
+            if not data_dict:
+                raise ValueError("Input data could not be converted to dictionary format")
+            
+            # Check cache first
+            cache_key = self._generate_cache_key(data_dict)
+            if (cache_key in self._mapping_cache):
+                self._cache_hits += 1
+                return self._mapping_cache[cache_key]
+            self._cache_misses += 1
+            
+            # Determine entity type from entity definitions
+            entity_type = self._determine_entity_type(data_dict)
+            if not entity_type:
+                logger.warning("Could not determine entity type", extra={'fields': list(data_dict.keys())})
+                self._increment_error_count('unknown_type')
+                return {}
+                
+            # Get entity configuration
+            entity_config = self.entities.get(entity_type, {})
+            if not entity_config:
+                logger.error(f"Missing configuration for entity type: {entity_type}")
+                self._increment_error_count('missing_config')
+                return {}
+                
+            # Add entity type to result
+            result['entity_type'] = entity_type
+            
+            # Validate entity data
+            if not self._validation_mediator.validate_entity(entity_type, data_dict):
+                self.errors.extend(self._validation_mediator.get_validation_errors())
+                self._increment_error_count('validation_failure')
+                return {}
+            
+            # Apply field mappings from entity definition
+            field_mappings = entity_config.get('field_mappings', {})
+            
+            # Special handling for agency entities
+            if entity_type == 'agency':
+                multi_source = field_mappings.get('multi_source', {})
+                agency_key = self._generate_agency_key(data_dict, multi_source)
+                if agency_key:
+                    result['id'] = agency_key
+                    # Apply field mappings
+                    agency_fields = self._apply_multi_source_mappings(data_dict, multi_source)
+                    result.update(agency_fields)
+                else:
+                    self._increment_error_count('missing_agency_key')
+                    return {}
+            else:
+                # Apply regular field mappings for other entities
+                direct_mappings = field_mappings.get('direct', {})
+                result.update(self._apply_direct_mappings(data_dict, direct_mappings))
+                
+                multi_source = field_mappings.get('multi_source', {})
+                result.update(self._apply_multi_source_mappings(data_dict, multi_source))
+                
+                object_mappings = field_mappings.get('object', {})
+                result.update(self._apply_object_mappings(data_dict, object_mappings))
+                
+                reference_mappings = field_mappings.get('reference', {})
+                result.update(self._apply_reference_mappings(data_dict, reference_mappings))
+
+            if self._mapped_fields:
+                # Cache successful mapping
+                self._mapping_cache[cache_key] = result
+                logger.debug(f"Mapped {len(self._mapped_fields)} fields for {entity_type} entity")
+                return result
+            else:
+                logger.warning(f"No fields were mapped for {entity_type} entity")
+                self._increment_error_count('no_fields_mapped')
+                return {}
+            
+        except Exception as e:
+            logger.error(f"Entity mapping failed: {str(e)}", exc_info=True)
+            self._increment_error_count('mapping_error')
+            raise EntityMappingError(f"Failed to map entity: {str(e)}")
+
     def _ensure_dict_data(self, data: Any) -> Dict[str, Any]:
         """Ensure data is in dictionary format."""
         if isinstance(data, dict):
@@ -51,32 +147,18 @@ class EntityMapper(BaseValidator):
             logger.warning(f"Could not convert data to dictionary: {type(data)}")
             return {}
 
-    def _get_field_value_from_sources(self, data: Dict[str, Any], sources: List[str]) -> Optional[Any]:
-        """Get first non-empty value from multiple source fields."""
-        for source in sources:
-            if source in data and data[source]:
-                return data[source]
-        return None
-
-    def _generate_agency_key(self, data: Dict[str, Any], multi_source: Dict[str, Any]) -> Optional[str]:
-        """Generate a unique key for an agency entity using composite fields."""
-        # Get values for all key components
-        agency_code = self._get_field_value_from_sources(data, multi_source.get('agency_code', {}).get('sources', []))
-        sub_agency_code = self._get_field_value_from_sources(data, multi_source.get('sub_agency_code', {}).get('sources', []))
-        office_code = self._get_field_value_from_sources(data, multi_source.get('office_code', {}).get('sources', []))
+    def _determine_entity_type(self, data: Dict[str, Any]) -> Optional[str]:
+        """Determine entity type from data based on entity definitions."""
+        field_values = self._ensure_dict_data(data)
         
-        # Agency code is required
-        if not agency_code:
-            return None
-            
-        # Build composite key with available parts
-        key_parts = [agency_code]
-        if sub_agency_code:
-            key_parts.append(sub_agency_code)
-        if office_code:
-            key_parts.append(office_code)
-            
-        return ':'.join(key_parts)
+        # Check entities in processing order
+        for entity_type, order in self.entity_order:
+            if self._check_key_fields(field_values, entity_type):
+                logger.debug(f"Determined entity type: {entity_type} with processing order {order}")
+                return entity_type
+                
+        logger.debug(f"Could not determine entity type from fields: {list(field_values.keys())}")
+        return None
 
     def _check_key_fields(self, data: Dict[str, Any], entity_type: str) -> bool:
         """Check if data contains required key fields for entity type."""
@@ -112,17 +194,31 @@ class EntityMapper(BaseValidator):
                     
         return False
 
-    def _determine_entity_type(self, data: Dict[str, Any]) -> Optional[str]:
-        """Determine entity type from data based on entity definitions."""
-        field_values = self._ensure_dict_data(data)
+    def _generate_agency_key(self, data: Dict[str, Any], multi_source: Dict[str, Any]) -> Optional[str]:
+        """Generate a unique key for an agency entity using composite fields."""
+        # Get values for all key components
+        agency_code = self._get_field_value_from_sources(data, multi_source.get('agency_code', {}).get('sources', []))
+        sub_agency_code = self._get_field_value_from_sources(data, multi_source.get('sub_agency_code', {}).get('sources', []))
+        office_code = self._get_field_value_from_sources(data, multi_source.get('office_code', {}).get('sources', []))
         
-        # Check entities in processing order
-        for entity_type, order in self.entity_order:
-            if self._check_key_fields(field_values, entity_type):
-                logger.debug(f"Determined entity type: {entity_type} with processing order {order}")
-                return entity_type
-                
-        logger.debug(f"Could not determine entity type from fields: {list(field_values.keys())}")
+        # Agency code is required
+        if not agency_code:
+            return None
+            
+        # Build composite key with available parts
+        key_parts = [agency_code]
+        if sub_agency_code:
+            key_parts.append(sub_agency_code)
+        if office_code:
+            key_parts.append(office_code)
+            
+        return ':'.join(key_parts)
+
+    def _get_field_value_from_sources(self, data: Dict[str, Any], sources: List[str]) -> Optional[Any]:
+        """Get first non-empty value from multiple source fields."""
+        for source in sources:
+            if source in data and data[source]:
+                return data[source]
         return None
 
     def _apply_direct_mappings(self, data: Dict[str, Any], mappings: Dict[str, Any]) -> Dict[str, Any]:
@@ -133,7 +229,7 @@ class EntityMapper(BaseValidator):
                 # Direct string mapping
                 if mapping in data:
                     value = data[mapping]
-                    if self.validate_field(mapping, value):
+                    if self._validation_mediator.validate_field(mapping, value):
                         result[target_field] = value
                         self._mapped_fields.add(target_field)
             elif isinstance(mapping, dict):
@@ -141,7 +237,7 @@ class EntityMapper(BaseValidator):
                 source_field = mapping.get('field')
                 if source_field and source_field in data:
                     value = data[source_field]
-                    if self.validate_field(source_field, value):
+                    if self._validation_mediator.validate_field(source_field, value):
                         result[target_field] = value
                         self._mapped_fields.add(target_field)
         return result
@@ -157,7 +253,7 @@ class EntityMapper(BaseValidator):
                 if strategy == 'first_non_empty':
                     value = self._get_field_value_from_sources(data, sources)
                     if value is not None:
-                        if self.validate_field(sources[0], value):  # Validate using first source field
+                        if self._validation_mediator.validate_field(sources[0], value):
                             result[target_field] = value
                             self._mapped_fields.add(target_field)
                             logger.debug(f"Mapped {target_field} from multi-source: {value}")
@@ -174,11 +270,16 @@ class EntityMapper(BaseValidator):
                     if isinstance(field_mapping, dict):
                         source = field_mapping.get('field')
                         if source and source in data:
-                            obj_result[obj_field] = data[source]
+                            value = data[source]
+                            if self._validation_mediator.validate_field(source, value):
+                                obj_result[obj_field] = value
                     elif isinstance(field_mapping, str) and field_mapping in data:
-                        obj_result[obj_field] = data[field_mapping]
+                        value = data[field_mapping]
+                        if self._validation_mediator.validate_field(field_mapping, value):
+                            obj_result[obj_field] = value
                 if obj_result:
                     result[target_field] = obj_result
+                    self._mapped_fields.add(target_field)
         return result
 
     def _apply_reference_mappings(self, data: Dict[str, Any], mappings: Dict[str, Any]) -> Dict[str, Any]:
@@ -214,171 +315,38 @@ class EntityMapper(BaseValidator):
                             'data': key_values
                         }
         return result
-        
-    def map_entity(self, data: Any) -> Dict[str, Any]:
-        """Map data to entity format using configuration mappings."""
-        result = {}
-        self.errors.clear()
-        
-        try:
-            # Convert input to dictionary format
-            data_dict = self._ensure_dict_data(data)
-            
-            # Determine entity type from entity definitions
-            entity_type = self._determine_entity_type(data_dict)
-            if not entity_type:
-                return {}
-                
-            # Get entity configuration
-            entity_config = self.entities.get(entity_type, {})
-            if not entity_config:
-                logger.error(f"Missing configuration for entity type: {entity_type}")
-                return {}
-                
-            # Add entity type to result
-            result['entity_type'] = entity_type
-            
-            # Apply field mappings from entity definition
-            field_mappings = entity_config.get('field_mappings', {})
-            
-            # Special handling for agency entities
-            if entity_type == 'agency':
-                multi_source = field_mappings.get('multi_source', {})
-                # Generate unique agency ID first
-                agency_key = self._generate_agency_key(data_dict, multi_source)
-                if agency_key:
-                    result['id'] = agency_key
-                    # Apply field mappings
-                    agency_fields = self._apply_multi_source_mappings(data_dict, multi_source)
-                    result.update(agency_fields)
-                    logger.debug(f"Mapped agency fields for {agency_key}: {list(agency_fields.keys())}")
-                else:
-                    return {}
-            else:
-                # Apply regular field mappings for other entities
-                direct_mappings = field_mappings.get('direct', {})
-                result.update(self._apply_direct_mappings(data_dict, direct_mappings))
-                
-                multi_source = field_mappings.get('multi_source', {})
-                result.update(self._apply_multi_source_mappings(data_dict, multi_source))
-                
-                object_mappings = field_mappings.get('object', {})
-                result.update(self._apply_object_mappings(data_dict, object_mappings))
-                
-                reference_mappings = field_mappings.get('reference', {})
-                result.update(self._apply_reference_mappings(data_dict, reference_mappings))
 
-            # Log mapping results
-            logger.debug(f"Mapped {len(self._mapped_fields)} fields for {entity_type} entity")
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Entity mapping failed: {str(e)}", exc_info=True)
-            raise EntityMappingError(f"Failed to map entity: {str(e)}")
+    def _generate_cache_key(self, data: Dict[str, Any]) -> str:
+        """Generate cache key for input data."""
+        # Sort keys for consistent ordering
+        sorted_items = sorted(
+            (k, str(v)) for k, v in data.items() 
+            if v is not None and v != ""
+        )
+        return ';'.join(f"{k}={v}" for k, v in sorted_items)
 
-    def _validate_field_value(self, field_name: str, value: Any,
-                          validation_context: Optional[Dict[str, Any]] = None) -> bool:
-        """Validate field value using field properties from config."""
-        try:
-            # Find matching field property type
-            for type_name, type_config in self.field_properties.items():
-                fields = type_config.get('fields', [])
-                
-                # Check exact match
-                if field_name in fields:
-                    validation = type_config.get('validation', {})
-                    return self._apply_validation_rules(value, validation, validation_context)
-                    
-                # Check pattern match
-                for field_pattern in fields:
-                    if '*' in field_pattern:
-                        pattern = field_pattern.replace('*', '.*')
-                        if re.match(pattern, field_name):
-                            validation = type_config.get('validation', {})
-                            return self._apply_validation_rules(value, validation, validation_context)
-            
-            return True  # No validation rules found
-            
-        except Exception as e:
-            logger.error(f"Validation error for {field_name}: {str(e)}")
-            self.errors.append(f"Field validation failed: {str(e)}")
-            return False
-            
-    def _apply_validation_rules(self, value: Any, validation: Dict[str, Any],
-                             context: Optional[Dict[str, Any]] = None) -> bool:
-        """Apply validation rules from configuration."""
-        # Get validation type and rules
-        validation_type = validation.get('type')
-        if not validation_type:
-            return True
-            
-        try:
-            if validation_type == 'string':
-                if not isinstance(value, str):
-                    return False
-                pattern = validation.get('pattern')
-                if pattern and not re.match(pattern, value):
-                    return False
-                max_length = validation.get('max_length')
-                if max_length and len(value) > max_length:
-                    return False
-                    
-            elif validation_type == 'integer':
-                try:
-                    int_value = int(value)
-                    min_value = validation.get('min_value')
-                    max_value = validation.get('max_value')
-                    if min_value is not None and int_value < min_value:
-                        return False
-                    if max_value is not None and int_value > max_value:
-                        return False
-                except (ValueError, TypeError):
-                    return False
-                    
-            elif validation_type == 'decimal':
-                try:
-                    float_value = float(value)
-                    min_value = validation.get('min_value')
-                    max_value = validation.get('max_value')
-                    if min_value is not None and float_value < min_value:
-                        return False
-                    if max_value is not None and float_value > max_value:
-                        return False
-                except (ValueError, TypeError):
-                    return False
-                    
-            elif validation_type == 'enum':
-                allowed_values = validation.get('values', {})
-                return str(value).upper() in (v.upper() for v in allowed_values)
-                
-            elif validation_type == 'boolean':
-                true_values = validation.get('true_values', [])
-                false_values = validation.get('false_values', [])
-                str_value = str(value).lower()
-                return str_value in (v.lower() for v in true_values + false_values)
-                
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error applying validation rules: {str(e)}")
-            return False
-            
+    def _increment_error_count(self, error_type: str) -> None:
+        """Increment error counter for given error type."""
+        self._error_counts[error_type] = self._error_counts.get(error_type, 0) + 1
+
     def get_mapping_errors(self) -> List[str]:
         """Get mapping error messages."""
-        return self.get_validation_errors()
-        
+        return self.errors.copy()
+
     def get_mapping_stats(self) -> Dict[str, Any]:
         """Get mapping statistics."""
-        stats = self.get_validation_stats()
-        stats.update({
-            'mapped_fields': len(self._mapped_fields)
-        })
+        stats = {
+            'mapped_fields': len(self._mapped_fields),
+            'cache_size': len(self._mapping_cache),
+            'error_count': len(self.errors),
+            'cache_hits': self._cache_hits,
+            'cache_misses': self._cache_misses,
+            'error_counts': self._error_counts
+        }
         return stats
-        
+
     def clear_caches(self) -> None:
         """Clear all mapping caches."""
-        super().clear_cache()
         self._mapping_cache.clear()
-        self._file_cache.clear()
         self._mapped_fields.clear()
+        super().clear_cache()

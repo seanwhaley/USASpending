@@ -1,5 +1,5 @@
 [run]
-source = src/usaspending,process_transactions.py
+source = src/usaspending
 omit = tests/*, */__pycache__/*, */\.*
 
 [report]

@@ -5,6 +5,7 @@ import re
 
 from .interfaces import IFieldSelector
 from .logging_config import get_logger
+from .component_utils import implements
 
 logger = get_logger(__name__)
 
@@ -14,6 +15,7 @@ class FieldPath:
     path: str
     array_indices: Dict[str, int]
 
+@implements(IFieldSelector)
 class FieldSelector(IFieldSelector):
     """Handles field selection and extraction from data."""
     

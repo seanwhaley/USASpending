@@ -1,7 +1,7 @@
 """Tests for the enum_adapters module."""
 import pytest
 from enum import Enum
-from src.usaspending.enum_adapters import EnumFieldAdapter, MappedEnumFieldAdapter
+from usaspending.enum_adapters import EnumFieldAdapter, MappedEnumFieldAdapter
 
 
 class TestEnum(Enum):

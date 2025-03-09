@@ -9,7 +9,7 @@ import jsonschema
 from pydantic import BaseModel, Field, ConfigDict
 
 # For Pydantic v2 compatibility
-def list_factory():
+def list_factory() -> List[Any]:
     """Factory function for creating empty lists."""
     return []
 
@@ -115,6 +115,11 @@ class ConfigLoader:
                         f"Unsupported config file format: {path}"
                     )
                     
+            # Ensure config is a dictionary
+            if not isinstance(config, dict):
+                logger.error(f"Config file does not contain a valid dictionary: {path}")
+                return None
+                
             validation_errors = self.validator.validate_config(config)
             if not validation_errors:
                 return config

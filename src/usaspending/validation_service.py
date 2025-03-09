@@ -1,273 +1,217 @@
 """Validation service for field and entity validation."""
-from typing import Dict, Any, Optional, List, Set, Tuple
+from typing import Dict, Any, Optional, List, Set, DefaultDict
 from collections import defaultdict
+import logging
+from datetime import datetime
+from threading import Lock
 
-from . import get_logger, ConfigurationError, implements
+from .interfaces import IValidationService, IFieldValidator, IValidationMediator
 from .validation_base import BaseValidator
-from .validation_rules import ValidationRuleLoader
-from .text_file_cache import TextFileCache
-from .interfaces import IValidationService, ISchemaAdapter, IDependencyManager
+from .exceptions import ValidationError
+from .component_utils import implements
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 @implements(IValidationService)
-class ValidationService(IValidationService):
+class ValidationService(BaseValidator, IValidationService):
     """Service for validating data fields using configured rules."""
-    
-    def __init__(self, dependency_manager: IDependencyManager, rule_loader: Optional[ValidationRuleLoader] = None):
-        """Initialize validation service."""
-        self.dependency_manager = dependency_manager
-        self.rule_loader = rule_loader
-        self.adapters: Dict[str, ISchemaAdapter] = {}
-        self.rules: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        self.validation_errors: List[str] = []
-        self._rule_cache: Dict[str, Dict[str, Any]] = {}
-        self._file_cache = TextFileCache()
-        self._stats: Dict[str, int] = defaultdict(int)
+
+    def __init__(self, validation_mediator: IValidationMediator, config: Dict[str, Any]):
+        """Initialize validation service with mediator and configuration."""
+        super().__init__()
+        self._mediator = validation_mediator
+        self._config = config
+        self._rules = self._load_validation_rules()
+        self._dependencies = self._initialize_dependencies()
+        self._validation_cache: Dict[str, Dict[str, bool]] = {}
+        self._cache_lock = Lock()
+        self._error_details: DefaultDict[str, List[Dict[str, Any]]] = defaultdict(list)
+        self._cache_stats = {
+            'hits': 0,
+            'misses': 0,
+            'invalidations': 0
+        }
+        self._max_cache_size = config.get('cache_size', 10000)
+        self._strict_mode = config.get('strict_mode', False)
         
-    def validate_field(self, field_name: str, value: Any) -> List[str]:
-        """Validate a single field value.
+        logger.info(f"Validation service initialized with {len(self._rules)} rule sets")
+
+    def _load_validation_rules(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Load validation rules from configuration."""
+        validation_config = self._config.get('validation_rules', {})
+        rules = {}
         
-        Args:
-            field_name: Name of field to validate
-            value: Value to validate
-            
-        Returns:
-            List of validation error messages
-        """
-        self.validation_errors.clear()
-        
-        # Get validation rules for the field
-        field_rules = self.rules.get(field_name, [])
-        if not field_rules and self.rule_loader:
-            field_rules = self._get_field_rules(field_name)
-            
-        # Perform validation
-        if not self._validate_field(field_name, value, field_rules):
-            return self.validation_errors.copy()
-            
-        return []
-        
-    def validate_record(self, record: Dict[str, Any]) -> List[str]:
-        """Validate an entire record.
-        
-        Args:
-            record: Record to validate
-            
-        Returns:
-            List of validation error messages
-        """
-        self.validation_errors.clear()
-        
-        # Get validation order considering dependencies
-        validation_order = self.dependency_manager.get_validation_order(list(record.keys()))
-        
-        # Validate fields in order
-        for field_name in validation_order:
-            if field_name not in record:
-                continue
-                
-            # Validate dependencies
-            dep_errors = self.dependency_manager.validate_dependencies(record, field_name, self.adapters)
-            if dep_errors:
-                self.validation_errors.extend(dep_errors)
-                self._stats['dependency_errors'] += len(dep_errors)
-                continue
-            
-            # Validate the field
-            field_value = record[field_name]
-            field_rules = self.rules.get(field_name, [])
-            if not field_rules and self.rule_loader:
-                field_rules = self._get_field_rules(field_name)
-                
-            if not self._validate_field(field_name, field_value, field_rules):
-                self._stats['field_validation_failures'] += 1
-                
-        return self.validation_errors.copy()
-        
-    def get_validation_stats(self) -> Dict[str, Any]:
-        """Get validation statistics.
-        
-        Returns:
-            Dictionary of validation statistics
-        """
-        return dict(self._stats)
-        
-    def _validate_field(self, field_name: str, value: Any, rules: List[Dict[str, Any]]) -> bool:
-        """Validate a single field value.
-        
-        Args:
-            field_name: Name of field to validate
-            value: Value to validate
-            rules: List of validation rules
-            
-        Returns:
-            True if valid, False otherwise
-        """
         try:
-            # Get appropriate adapter
-            adapter = self.adapters.get(field_name)
-            if not adapter:
-                return True  # No adapter means valid
-                
-            # Apply each rule
-            for rule in rules:
-                if not adapter.validate(value, rule):
-                    errors = adapter.get_validation_errors()
-                    self.validation_errors.extend(errors)
-                    self._stats['field_errors'] += len(errors)
-                    return False
+            for entity_type, rule_sets in validation_config.items():
+                if isinstance(rule_sets, list):
+                    rules[entity_type] = rule_sets
+                elif isinstance(rule_sets, dict):
+                    rules[entity_type] = [rule_sets]
+                else:
+                    logger.error(f"Invalid rule configuration for {entity_type}")
                     
-            return True
-            
+            return rules
         except Exception as e:
-            logger.error(f"Error validating field {field_name}: {str(e)}")
-            self.validation_errors.append(f"Validation failed for field '{field_name}': {str(e)}")
-            self._stats['validation_errors'] += 1
-            return False
-            
-    def _get_field_rules(self, field_name: str) -> List[Dict[str, Any]]:
-        """Get validation rules for a field.
+            logger.error(f"Error loading validation rules: {str(e)}")
+            raise ValidationError(f"Failed to load validation rules: {str(e)}")
+
+    def _initialize_dependencies(self) -> Dict[str, Set[str]]:
+        """Initialize field dependencies."""
+        dependencies = {}
         
-        Args:
-            field_name: Field name to get rules for
-            
-        Returns:
-            List of validation rules
-        """
-        # Check cache first
-        if field_name in self._rule_cache:
-            return self._rule_cache[field_name]
-            
-        # Load from rule loader
         try:
-            if self.rule_loader:
-                rules = self.rule_loader.get_field_rules(field_name)
-                if rules:
-                    self._rule_cache[field_name] = rules if isinstance(rules, list) else [rules]
-                    return self._rule_cache[field_name]
+            for entity_type, rule_sets in self._rules.items():
+                field_deps = set()
+                for rule_set in rule_sets:
+                    if isinstance(rule_set, dict):
+                        # Extract dependent fields from rules
+                        deps = rule_set.get('dependencies', [])
+                        if isinstance(deps, list):
+                            field_deps.update(deps)
+                            
+                dependencies[entity_type] = field_deps
+                
+            return dependencies
         except Exception as e:
-            logger.error(f"Failed to load rules for field {field_name}: {str(e)}")
-            
-        return []
+            logger.error(f"Error initializing dependencies: {str(e)}")
+            raise ValidationError(f"Failed to initialize dependencies: {str(e)}")
 
-class ValidationServiceBuilder:
-    """Builder for creating configured ValidationService instances."""
-    
-    def __init__(self):
-        """Initialize builder."""
-        self.dependency_manager = None
-        self.rule_loader = None
-        self.strict_mode = False
-        self.cache_size = 1000
-        self.parallel = True
-        self.max_errors = 100
-    
-    def with_dependency_manager(self, dependency_manager: IDependencyManager) -> 'ValidationServiceBuilder':
-        """Set dependency manager."""
-        self.dependency_manager = dependency_manager
-        return self
-    
-    def with_rule_loader(self, rule_loader: ValidationRuleLoader) -> 'ValidationServiceBuilder':
-        """Set rule loader."""
-        self.rule_loader = rule_loader
-        return self
-    
-    def with_strict_mode(self, strict_mode: bool) -> 'ValidationServiceBuilder':
-        """Set strict mode."""
-        self.strict_mode = strict_mode
-        return self
-    
-    def with_cache_size(self, cache_size: int) -> 'ValidationServiceBuilder':
-        """Set cache size."""
-        self.cache_size = cache_size
-        return self
-    
-    def with_parallel_validation(self, parallel: bool) -> 'ValidationServiceBuilder':
-        """Set parallel validation."""
-        self.parallel = parallel
-        return self
-    
-    def with_max_errors(self, max_errors: int) -> 'ValidationServiceBuilder':
-        """Set maximum errors."""
-        self.max_errors = max_errors
-        return self
-    
-    def build(self) -> ValidationService:
-        """Create ValidationService instance."""
-        if not self.dependency_manager:
-            # Create a simple default dependency manager instead of importing
-            # This avoids the dependency on a specific module
-            class SimpleDependencyManager(IDependencyManager):
-                def __init__(self):
-                    self.dependencies = {}
-                
-                def add_dependency(self, field_name, target_field, dependency_type="", validation_rule=None):
-                    if field_name not in self.dependencies:
-                        self.dependencies[field_name] = []
-                    self.dependencies[field_name].append((target_field, dependency_type))
-                
-                def get_validation_order(self, fields):
-                    # Simple implementation that doesn't do topological sorting
-                    return list(fields)
-                
-                def validate_dependencies(self, data, field_name, adapters):
-                    return []  # No validation errors by default
-            
-            self.dependency_manager = SimpleDependencyManager()
-            
-        service = ValidationService(self.dependency_manager, self.rule_loader)
+    def validate_entity(self, entity_type: str, data: Dict[str, Any]) -> bool:
+        """Validate an entity against rules."""
+        self.errors.clear()
+        validation_start = datetime.utcnow()
         
-        # Configure file cache size
-        if hasattr(service._file_cache, 'set_max_size'):
-            service._file_cache.set_max_size(self.cache_size)
+        try:
+            # Generate cache key
+            cache_key = self._generate_cache_key(entity_type, data)
             
-        return service
+            # Check cache first
+            with self._cache_lock:
+                if cache_key in self._validation_cache:
+                    self._cache_stats['hits'] += 1
+                    return self._validation_cache[cache_key].get('valid', False)
+                self._cache_stats['misses'] += 1
+            
+            # Use mediator for entity validation
+            is_valid = self._mediator.validate_entity(entity_type, data)
+            validation_errors = self._mediator.get_validation_errors() if not is_valid else []
+            
+            if validation_errors:
+                self.errors.extend(validation_errors)
+                
+                # Store detailed error information
+                error_detail = {
+                    'entity_type': entity_type,
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'errors': validation_errors,
+                    'data': data if self._strict_mode else None
+                }
+                self._error_details[entity_type].append(error_detail)
+                
+                # Trim error history if needed
+                while len(self._error_details[entity_type]) > 100:  # Keep last 100 errors
+                    self._error_details[entity_type].pop(0)
+            
+            # Cache validation result
+            self._cache_validation_result(cache_key, is_valid)
+            
+            # Log validation duration for monitoring
+            validation_duration = (datetime.utcnow() - validation_start).total_seconds()
+            logger.debug(f"Entity validation took {validation_duration:.3f}s",
+                        extra={'entity_type': entity_type, 'duration': validation_duration})
+            
+            return is_valid
+            
+        except Exception as e:
+            logger.error(f"Entity validation error: {str(e)}", exc_info=True)
+            self.errors.append(f"Entity validation failed: {str(e)}")
+            return False
 
-# Factory method to create an instance from the configuration
-def create_validation_service_from_config(config: Dict[str, Any]) -> IValidationService:
-    """Create a ValidationService instance from configuration."""
-    # Extract config from system.validation_service section if needed
-    if isinstance(config, dict) and "config" in config:
-        config = config["config"]
-    
-    # Get validation service configuration options
-    strict_mode = config.get("strict_mode", False)
-    cache_size = config.get("cache_size", 1000)
-    parallel = config.get("parallel", True)
-    max_errors = config.get("max_errors", 100)
-    
-    # Create dependency manager - needed for dependency validation
-    from .field_dependencies import FieldDependencyManager
-    dependency_manager = FieldDependencyManager()
-    
-    # Create rule loader if schema path is provided
-    rule_loader = None
-    if "schema_path" in config:
-        from .validation_rules import ValidationRuleLoader
-        rule_loader = ValidationRuleLoader(config["schema_path"])
-    
-    # If we have field dependencies defined in config, add them
-    if isinstance(config, dict) and "field_dependencies" in config:
-        for field_name, dependencies in config["field_dependencies"].items():
-            for dep in dependencies:
-                target_field = dep.get("target_field")
-                dep_type = dep.get("type", "required")
-                if target_field:
-                    dependency_manager.add_dependency(
-                        field_name=field_name,
-                        target_field=target_field,
-                        dependency_type=dep_type,
-                        validation_rule=dep.get("validation_rule")
-                    )
-    
-    # Create and configure validation service
-    builder = ValidationServiceBuilder()
-    return (builder
-            .with_dependency_manager(dependency_manager)
-            .with_rule_loader(rule_loader)
-            .with_strict_mode(strict_mode)
-            .with_cache_size(cache_size)
-            .with_parallel_validation(parallel)
-            .with_max_errors(max_errors)
-            .build())
+    def _validate_field_value(self, field_name: str, value: Any,
+                            validation_context: Optional[Dict[str, Any]] = None) -> bool:
+        """Validate a field value using configured rules."""
+        try:
+            # Get field type for validation
+            field_type = self._get_field_type(field_name)
+            if not field_type:
+                return True  # No specific validation rules
+                
+            # Check dependencies if context provided
+            if validation_context and field_name in self._dependencies:
+                for dep_field in self._dependencies[field_name]:
+                    if dep_field not in validation_context:
+                        self.errors.append(f"Missing dependent field: {dep_field}")
+                        return False
+            
+            # Validate using mediator
+            is_valid = self._mediator.validate_field(field_name, value)
+            if not is_valid:
+                self.errors.extend(self._mediator.get_validation_errors())
+            
+            return is_valid
+            
+        except Exception as e:
+            logger.error(f"Field validation error for {field_name}: {str(e)}")
+            self.errors.append(f"Field validation failed: {str(e)}")
+            return False
+
+    def _get_field_type(self, field_name: str) -> Optional[str]:
+        """Get field type from configuration."""
+        field_types = self._config.get('field_types', {})
+        
+        # Check exact match
+        if field_name in field_types:
+            return field_types[field_name]
+            
+        # Check pattern match
+        for pattern, field_type in field_types.items():
+            if pattern.endswith('*'):
+                prefix = pattern[:-1]
+                if field_name.startswith(prefix):
+                    return field_type
+        
+        return None
+
+    def _generate_cache_key(self, entity_type: str, data: Dict[str, Any]) -> str:
+        """Generate cache key for validation results."""
+        # Sort fields for consistent key generation
+        sorted_items = sorted(
+            (k, str(v)) for k, v in data.items()
+            if v is not None and k in self._dependencies.get(entity_type, set())
+        )
+        return f"{entity_type}:" + ";".join(f"{k}={v}" for k, v in sorted_items)
+
+    def _cache_validation_result(self, cache_key: str, is_valid: bool) -> None:
+        """Cache validation result with size management."""
+        with self._cache_lock:
+            # Clear cache if size limit reached
+            if len(self._validation_cache) >= self._max_cache_size:
+                self._validation_cache.clear()
+                self._cache_stats['invalidations'] += 1
+                
+            self._validation_cache[cache_key] = {
+                'valid': is_valid,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+
+    def get_validation_stats(self) -> Dict[str, Any]:
+        """Get validation statistics."""
+        return {
+            'cache_stats': dict(self._cache_stats),
+            'rules_count': len(self._rules),
+            'error_counts': {
+                entity_type: len(errors)
+                for entity_type, errors in self._error_details.items()
+            },
+            'latest_errors': {
+                entity_type: errors[-5:]  # Last 5 errors per type
+                for entity_type, errors in self._error_details.items()
+            } if self._strict_mode else None
+        }
+
+    def clear_caches(self) -> None:
+        """Clear validation caches."""
+        with self._cache_lock:
+            self._validation_cache.clear()
+            self._cache_stats['invalidations'] += 1
+        super().clear_cache()

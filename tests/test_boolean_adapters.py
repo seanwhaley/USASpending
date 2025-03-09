@@ -1,12 +1,14 @@
 """Tests for the boolean_adapters module."""
 import pytest
-from src.usaspending.boolean_adapters import BooleanFieldAdapter, FormattedBooleanAdapter
+from usaspending.boolean_adapters import BooleanFieldAdapter, FormattedBooleanAdapter
+from usaspending.schema_adapters import BooleanAdapter, SchemaAdapterFactory
 
 
 @pytest.fixture
 def basic_boolean_adapter():
     """Create a basic boolean adapter for testing."""
-    return BooleanFieldAdapter()
+    factory = SchemaAdapterFactory()
+    return factory.create_adapter('boolean')
 
 
 @pytest.fixture
@@ -256,17 +258,17 @@ def test_get_validation_errors(basic_boolean_adapter):
     adapter = basic_boolean_adapter
     
     # No errors initially
-    assert adapter.get_validation_errors() == []
+    assert adapter.get_errors() == []
     
     # After validation failure
     adapter.validate('invalid', 'test_field')
-    errors = adapter.get_validation_errors()
+    errors = adapter.get_errors()
     assert len(errors) == 1
     assert "Value 'invalid' is not a valid boolean" in errors[0]
     
     # Ensure the returned list is a copy, not the original
     errors.clear()
-    assert len(adapter.get_validation_errors()) == 1
+    assert len(adapter.get_errors()) == 1
 
 
 def test_formatted_boolean_adapter_initialization():
