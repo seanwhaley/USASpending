@@ -308,3 +308,25 @@ def safe_remove(path: PathLike) -> bool:
         return True
     except Exception:
         return False
+
+@retry_on_error()
+def safe_file_write(file_path: PathLike, content: str, encoding: str = 'utf-8') -> None:
+    """Write content to file safely using atomic operation."""
+    try:
+        with atomic_write(file_path, 'w', encoding=encoding) as f:
+            cast(TextIO, f).write(content)
+    except Exception as e:
+        raise FileOperationError(f"Failed to write file safely: {str(e)}") from e
+
+def chunked_file_read(file_path: PathLike, chunk_size: int = 8192,
+                     encoding: str = 'utf-8') -> Generator[str, None, None]:
+    """Read file in chunks to handle large files efficiently."""
+    try:
+        with open(file_path, 'r', encoding=encoding) as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+    except Exception as e:
+        raise FileOperationError(f"Failed to read file in chunks: {str(e)}") from e

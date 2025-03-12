@@ -1,21 +1,8 @@
 #!/usr/bin/env python
-"""
-Transaction data processor and validator for USASpending data.
-"""
-import sys
+"""Process transactions from input files."""
 import os
-import argparse
-import colorama
-from dataclasses import asdict
-from colorama import Fore, Style
-import json
 from pathlib import Path
-from typing import Dict, Any, Optional, Iterator, cast
-
-# Add project root to path
-project_root = Path(__file__).parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+from typing import Dict, Any, Optional, List
 
 from usaspending.core.config import ComponentConfig
 from usaspending.config import ConfigurationProvider as ConfigProvider
@@ -36,7 +23,7 @@ from usaspending.core.logging_config import configure_logging, get_logger
 
 # Environment variable name for configuration
 CONFIG_ENV_VAR = "USASPENDING_CONFIG"
-DEFAULT_CONFIG_PATH = project_root / "conversion_config.yaml"
+DEFAULT_CONFIG_PATH = Path(__file__).parent.parent / "conversion_config.yaml"
 
 logger = get_logger(__name__)
 
@@ -122,6 +109,7 @@ def process_transactions(config_path: str, input_file: Optional[str] = None) -> 
                             logger.info(f"Processed {processed_count} records")
                             chunk = []  # Clear the chunk
                             
+
                     except json.JSONDecodeError as e:
                         logger.error(f"Invalid JSON in line: {e}")
                         continue

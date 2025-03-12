@@ -486,10 +486,24 @@ class AdapterFactory:
         return adapter
 
 
+class IntegerAdapter(NumericAdapter):
+    """Integer type adapter."""
+    
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs['is_integer'] = True
+        super().__init__(**kwargs)
+    
+    def transform_field(self, value: Any) -> Optional[int]:
+        """Convert value to integer."""
+        result = super().transform_field(value)
+        return int(result) if result is not None else None
+
+
 __all__ = [
     'BaseAdapter',
     'StringAdapter',
     'NumericAdapter',
+    'IntegerAdapter',
     'DateAdapter',
     'BooleanAdapter',
     'EnumAdapter',

@@ -4,8 +4,11 @@ from setuptools import setup, find_packages
 setup(
     name="usaspending",
     version="0.1.0",
-    packages=find_packages(where="src"),
-    package_dir={"": "src"},
+    packages=find_packages(include=['usaspending*', 'tools*']),
+    package_dir={
+        "usaspending": "src/usaspending",
+        "tools": "tools"
+    },
     install_requires=[
         "PyYAML>=6.0.1,<7.0.0",
         "python-dateutil>=2.9.0.post0",  # Updated to latest version

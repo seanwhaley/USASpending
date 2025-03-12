@@ -22,7 +22,7 @@ if /i "%~1"=="--skip-gaps" set "RUN_GAPS=0"
 if /i "%~1"=="--skip-functional" set "RUN_FUNCTIONAL=0"
 if /i "%~1"=="--skip-validation" set "RUN_VALIDATION=0"
 if /i "%~1"=="--skip-dashboard" set "GENERATE_DASHBOARD=0"
-if /i "%~1"=="--no-open" set "OPEN_DASHBOARD=0"  REM Allow disabling auto-open
+if /i "%~1"=="--no-open" set "OPEN_DASHBOARD=0"
 shift
 goto parse_args
 
@@ -49,7 +49,7 @@ REM Set working directory to project root
 cd /d "%~dp0"
 
 echo Installing required packages...
-pip install pytest pytest-cov
+pip install pytest pytest-cov >nul
 
 echo.
 echo Running test analysis and generating dashboard...
@@ -59,7 +59,7 @@ echo.
 REM Run coverage analysis if requested
 if %RUN_COVERAGE%==1 (
     echo Running test coverage analysis...
-    python -m tools.run_tests
+    python -m tools run_tests
     if errorlevel 1 (
         echo Warning: Test coverage analysis had errors
         set "HAD_ERRORS=1"
@@ -71,7 +71,7 @@ if %RUN_COVERAGE%==1 (
 REM Run test quality analysis if requested
 if %RUN_QUALITY%==1 (
     echo Running test quality analysis...
-    python -m tools.analyze_test_quality
+    python -m tools analyze_test_quality
     if errorlevel 1 (
         echo Warning: Test quality analysis had errors
         set "HAD_ERRORS=1"
@@ -83,7 +83,7 @@ if %RUN_QUALITY%==1 (
 REM Run gap analysis if requested
 if %RUN_GAPS%==1 (
     echo Running gap analysis...
-    python -m tools.analyzers TestGapAnalyzer
+    python -m tools gap_analysis
     if errorlevel 1 (
         echo Warning: Gap analysis had errors
         set "HAD_ERRORS=1"
@@ -95,7 +95,7 @@ if %RUN_GAPS%==1 (
 REM Run functional coverage analysis if requested
 if %RUN_FUNCTIONAL%==1 (
     echo Generating functional coverage analysis...
-    python -m tools.analyzers FunctionalCoverageAnalyzer
+    python -m tools functional_analysis
     if errorlevel 1 (
         echo Warning: Functional coverage analysis had errors
         set "HAD_ERRORS=1"
@@ -107,7 +107,7 @@ if %RUN_FUNCTIONAL%==1 (
 REM Run validation if requested
 if %RUN_VALIDATION%==1 (
     echo Validating coverage thresholds...
-    python -m tools.validate_coverage
+    python -m tools validate_coverage
     if errorlevel 1 (
         echo Warning: Coverage validation had errors
         set "HAD_ERRORS=1"
@@ -120,14 +120,14 @@ REM Generate dashboard if requested
 if %GENERATE_DASHBOARD%==1 (
     echo.
     echo Generating dashboard...
-    python -m tools.reports
+    python -m tools generate_dashboard
     if errorlevel 1 (
         echo Warning: Dashboard generation had errors
         set "HAD_ERRORS=1"
     ) else (
         echo.
         echo ===================================================
-        echo Dashboard generation complete!
+        echo Dashboard generation complete
         echo Dashboard files available at output/test_dashboard/index.html
         echo ===================================================
         echo.
