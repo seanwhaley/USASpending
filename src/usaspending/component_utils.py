@@ -6,8 +6,9 @@ import threading
 import abc
 from functools import wraps
 
-from .logging_config import get_logger
-from .exceptions import ConfigurationError
+from .core.logging_config import get_logger
+from .core.exceptions import ConfigurationError
+from .core.config import ComponentConfig
 
 logger = get_logger(__name__)
 
@@ -23,16 +24,30 @@ def implements_interface(cls: Type, interface: Type) -> bool:
     Returns:
         True if cls implements interface, False otherwise
     """
-    # Get all abstract methods that need to be implemented
-    interface_methods = {
-        name: method for name, method in inspect.getmembers(interface)
-        if not name.startswith('_') and hasattr(method, '__isabstractmethod__')
+    # Get all abstract attributes (methods and properties)
+    interface_abstracts = {
+        name: attr for name, attr in inspect.getmembers(interface)
+        if not name.startswith('_') and (
+            getattr(attr, '__isabstractmethod__', False) or
+            isinstance(attr, property) and getattr(attr.fget, '__isabstractmethod__', False)
+        )
     }
     
-    # Check that all abstract methods are implemented
-    for name, method in interface_methods.items():
-        if not hasattr(cls, name) or getattr(getattr(cls, name), '__isabstractmethod__', False):
+    # Check all abstract attributes are implemented
+    for name, attr in interface_abstracts.items():
+        if not hasattr(cls, name):
             return False
+        
+        cls_attr = getattr(cls, name)
+        # Check if it's still abstract in the implementing class
+        if getattr(cls_attr, '__isabstractmethod__', False):
+            return False
+            
+        # For properties, check if the getter is implemented
+        if isinstance(attr, property):
+            if not isinstance(cls_attr, property) or getattr(cls_attr.fget, '__isabstractmethod__', False):
+                return False
+                
     return True
 
 def implements(interface: Type) -> Callable[[Type[T]], Type[T]]:
@@ -58,7 +73,7 @@ def implements(interface: Type) -> Callable[[Type[T]], Type[T]]:
         return cls
     return decorator
 
-def create_component(class_path: str, config: Dict[str, Any], **kwargs) -> Any:
+def create_component(class_path: str, config: Dict[str, Any], **kwargs: Any) -> Any:
     """Create a component instance from class path and configuration.
     
     Args:
@@ -79,11 +94,17 @@ def create_component(class_path: str, config: Dict[str, Any], **kwargs) -> Any:
         # Get class
         class_type = getattr(module, class_name)
         
-        # Combine config with additional kwargs
-        constructor_args = {**config, **kwargs}
+        # Create instance with constructor args
+        instance = class_type(**kwargs)
         
-        # Create and return instance
-        return class_type(**constructor_args)
+        # Configure if component is configurable
+        if hasattr(instance, 'configure'):
+            instance.configure(ComponentConfig(
+                settings=config,
+                class_path=class_path
+            ))
+            
+        return instance
         
     except Exception as e:
         logger.error(f"Error creating component {class_path}: {str(e)}")
@@ -125,8 +146,18 @@ def create_component_from_config(component_config: Dict[str, Any], existing_comp
             if param_name in existing_components:
                 kwargs[param_name] = existing_components[param_name]
         
-        # Create and return instance
-        return class_type(**kwargs)
+        # Create instance
+        instance = class_type(**kwargs)
+        
+        # Configure if component is configurable
+        if hasattr(instance, 'configure'):
+            instance.configure(ComponentConfig(
+                settings=component_config.get('config', {}),
+                class_path=class_path,
+                enabled=component_config.get('enabled', True)
+            ))
+            
+        return instance
         
     except Exception as e:
         logger.error(f"Error creating component from {class_path}: {str(e)}")

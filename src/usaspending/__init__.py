@@ -1,46 +1,91 @@
 """USASpending data processing package."""
-from typing import Dict, Any, List, Optional, Type, TypeVar
-import importlib
-import logging
 
-# Centralize common utility functions and classes
-from .exceptions import ConfigurationError
-from .logging_config import get_logger
-from .file_utils import ensure_directory
-
-# Re-export component utilities
-from .component_utils import (
-    create_component,
-    create_component_from_config, 
-    create_components_from_config,
-    implements,
-    implements_interface
+# Import core elements through the core package
+from .core import (
+    # Core exceptions
+    ConfigurationError,
+    StorageError, 
+    EntityError,
+    MappingError,
+    ValidationError,
+    TransformationError,
+    
+    # Core types
+    EntityData,
+    EntityKey,
+    ValidationResult,
+    ValidationRule,
+    TransformationRule,
+    FieldType,
+    
+    # Core interfaces
+    IEntityFactory,
+    IEntityStore,
+    IEntityMapper,
+    IStorageStrategy,
+    IConfigurable,
+    IValidationMediator,
+    
+    # Core base classes
+    BaseEntityFactory,
+    BaseEntityStore,
+    BaseEntityMapper,
+    BaseValidator,
+    
+    # Core components
+    ValidationService,
+    RuleSet
 )
 
-# Re-export main classes
+# Import implementation components
 from .entity_factory import EntityFactory
-from .entity_store import EntityStore, FileSystemEntityStore
-from .validation_service import ValidationService
+from .entity_store import EntityStore
+from .entity_mapper import EntityMapper
+from .entity_mediator import USASpendingEntityMediator
+from .dictionary import Dictionary
 
-# Alias ensure_directory to match expected name
-ensure_directory_exists = ensure_directory
+# Define version
+__version__ = '0.1.0'
 
 __all__ = [
-    # Utility functions
-    'get_logger',
-    'create_component',
-    'create_component_from_config',
-    'create_components_from_config',
-    'implements',
-    'implements_interface',
-    'ensure_directory_exists',
+    # Core types
+    'EntityData',
+    'EntityKey',
+    'ValidationResult',
+    'ValidationRule',
+    'TransformationRule',
+    'FieldType',
+    
+    # Core interfaces
+    'IEntityFactory',
+    'IEntityStore',
+    'IEntityMapper',
+    'IStorageStrategy',
+    'IConfigurable',
+    'IValidationMediator',
+    
+    # Core base classes
+    'BaseEntityFactory',
+    'BaseEntityStore',
+    'BaseEntityMapper',
+    'BaseValidator',
+    
+    # Core components
+    'ValidationService',
+    'RuleSet',
+    
+    # Implementations
+    'EntityFactory',
+    'EntityStore',
+    'EntityMapper',
+    'USASpendingEntityMediator',
+    'Dictionary',
     
     # Exceptions
     'ConfigurationError',
-    
-    # Main classes
-    'EntityFactory',
-    'EntityStore',
-    'FileSystemEntityStore',
-    'ValidationService',
+    'EntityError',
+    'StorageError',
+    'MappingError',
+    'ValidationError',
+    'TransformationError'
 ]

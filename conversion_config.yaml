@@ -122,7 +122,22 @@ validation_groups:
 # 2. DATA DICTIONARY
 #==============================================================================
 data_dictionary:
-  # Data dictionary crosswalk configuration
+  # Entity processing configuration for data dictionary conversion
+  entity_processing:
+    enabled: false  # Default disabled, enabled via command line argument
+    requires_trigger: true  # Indicates this entity requires explicit activation
+    trigger_argument: "--process-data-dictionary"  # Command line argument to enable processing
+    processing_order: 0  # Runs before all other entities when enabled
+    store_type: data_dictionary
+    dependencies: []  # No dependencies since it runs first
+    processing_options:
+      validation_level: strict
+      error_handling: abort  # Critical entity - abort on errors
+    concurrency:
+      enabled: false  # Single-threaded processing for data dictionary
+      max_workers: 1
+
+  # Crosswalk configuration (single source of I/O settings)
   crosswalk:
     input:
       file: USASpending_Data_Dictionary_Crosswalk.csv
@@ -161,6 +176,86 @@ data_dictionary:
       federal_action_obligation:
         element: FederalActionObligation
         grouping: Award Spending
+
+  # Entity mapping configuration
+  entity_mapping:
+    fields:
+      Element:
+        type: string
+        required: true
+        validation:
+          pattern: "^[A-Za-z0-9_]+$"
+          error_message: "Invalid element name format"
+      
+      Definition:
+        type: string
+        required: true
+        validation:
+          min_length: 1
+          error_message: "Definition cannot be empty"
+      
+      FPDS_Data_Dictionary_Element:
+        type: string
+        required: false
+        validation:
+          pattern: "^[A-Za-z0-9_]*$"
+          error_message: "Invalid FPDS element format"
+      
+      Grouping:
+        type: string
+        required: true
+        validation:
+          allowed_values:
+            - "Award Attribute"
+            - "Award Spending"
+            - "Recipient Attribute"
+            - "Contract Attribute"
+            - "Location Attribute"
+          error_message: "Invalid grouping value"
+      
+      Domain_Values:
+        type: array
+        required: false
+        item_validation:
+          pattern: "^[A-Za-z0-9_]+$"
+          error_message: "Invalid domain value format"
+
+    # Entity-specific field mappings
+    entity_fields:
+      agency:
+        - grouping: "Agency Information"
+          elements:
+            - awarding_agency_code
+            - awarding_agency_name
+            - funding_agency_code
+            - funding_agency_name
+      
+      recipient:
+        - grouping: "Recipient Attribute"
+          elements:
+            - recipient_uei
+            - recipient_name
+            - recipient_parent_uei
+            - recipient_parent_name
+      
+      location:
+        - grouping: "Location Attribute"
+          elements:
+            - recipient_address_line_1
+            - recipient_city_name
+            - recipient_state_code
+            - recipient_zip_4_code
+      
+      contract:
+        - grouping: "Award Attribute"
+          elements:
+            - contract_award_unique_key
+            - award_id_piid
+            - contract_description
+        - grouping: "Award Spending"
+          elements:
+            - federal_action_obligation
+            - total_dollars_obligated
 
 #==============================================================================
 # 3. FIELD PROPERTIES

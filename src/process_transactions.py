@@ -1,277 +1,186 @@
 #!/usr/bin/env python
 """
-Transaction data processor and validator.
+Transaction data processor and validator for USASpending data.
 """
 import sys
 import os
 import argparse
 import colorama
+from dataclasses import asdict
 from colorama import Fore, Style
 import json
 from pathlib import Path
+from typing import Dict, Any, Optional, Iterator, cast
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from usaspending.logging_config import configure_logging, get_logger
-from usaspending.config import ConfigManager
-from usaspending.config_validation import ConfigValidator
-from usaspending.config_schemas import ROOT_CONFIG_SCHEMA
-from usaspending.exceptions import ConfigurationError
-from usaspending.startup_checks import StartupValidator
-from usaspending.processor import convert_csv_to_json
-from usaspending.validation import validate_data
+from usaspending.core.config import ComponentConfig
+from usaspending.config import ConfigurationProvider as ConfigProvider
+from usaspending.core.validation import ValidationService
+from usaspending.core.validation_mediator import ValidationMediator
+from usaspending.entity_mediator import USASpendingEntityMediator as EntityMediator
+from usaspending.entity_mapper import EntityMapper
+from usaspending.entity_store import EntityStore
+from usaspending.entity_factory import EntityFactory
+from usaspending.dictionary import Dictionary
+from usaspending.core.exceptions import ConfigurationError
+from usaspending.core.utils import safe_operation
+from usaspending.core.types import (
+    EntityData, ValidationResult, ValidationRule, ValidationSeverity, 
+    RuleType, EntityConfig, EntityType
+)
+from usaspending.core.logging_config import configure_logging, get_logger
 
 # Environment variable name for configuration
-CONFIG_ENV_VAR = "CONVERSION_CONFIG"
-DEFAULT_CONFIG = "conversion_config.yaml"
+CONFIG_ENV_VAR = "USASPENDING_CONFIG"
+DEFAULT_CONFIG_PATH = project_root / "conversion_config.yaml"
 
-def get_config_path(cmd_arg=None):
-    """
-    Determine the configuration file path using precedence order:
-    1. Command line argument (if provided)
-    2. Environment variable (if set)
-    3. Default value
+logger = get_logger(__name__)
+
+def setup_validation(config: Dict[str, Any]) -> ValidationService:
+    """Set up validation components."""
+    validation_service = ValidationService(config)
+    validation_service.configure(ComponentConfig(settings=config.get('validation', {})))
+    return validation_service
+
+def setup_entity_mediator(config: Dict[str, Any], validation_service: ValidationService) -> EntityMediator:
+    """Set up entity mediation components."""
+    entity_factory = EntityFactory()
+    entity_store = EntityStore()
+    entity_mapper = EntityMapper()
     
-    Args:
-        cmd_arg: Command line argument value (if provided)
+    # Configure components with proper settings structure
+    factory_settings = config.get('entity_factory', {})
+    factory_settings['entities'] = config.get('entities', {})
+    factory_settings['mappings'] = config.get('mappings', {})
+    
+    entity_factory.configure(ComponentConfig(settings=factory_settings))
+    entity_store.configure(ComponentConfig(settings=config.get('entity_store', {})))
+    entity_mapper.configure(ComponentConfig(settings=config.get('entity_mapper', {})))
+    
+    mediator = EntityMediator(
+        factory=entity_factory,
+        store=entity_store,
+        mapper=entity_mapper
+    )
+    mediator.configure(ComponentConfig(settings=config.get('entity_mediator', {})))
+
+    return mediator
+
+def process_chunk(entity_mediator: EntityMediator, chunk: list[Dict[str, Any]]) -> None:
+    """Process a chunk of transaction records."""
+    for record in chunk:
+        try:
+            entity_id = entity_mediator.process_entity(cast(EntityType, 'transaction'), record)
+            if not entity_id:
+                logger.warning(f"Failed to process transaction: {record.get('contract_transaction_unique_key')}")
+        except Exception as e:
+            logger.error(f"Error processing transaction {record.get('contract_transaction_unique_key')}: {str(e)}")
+            continue
+
+@safe_operation
+def process_transactions(config_path: str, input_file: Optional[str] = None) -> None:
+    """Process transaction data using configuration."""
+    # Load configuration
+    config_provider = ConfigProvider()
+    config = config_provider.load_config(config_path)
+
+    if not config:
+        raise ConfigurationError(f"Failed to load configuration from {config_path}")
+
+    # Override input file if specified
+    if input_file:
+        config['system']['io']['input']['file'] = input_file
+
+    # Set up components
+    validation_service = setup_validation(config)
+    entity_mediator = setup_entity_mediator(config, validation_service)
+
+    # Process entities using mediator
+    try:
+        chunk_size = config.get('processing', {}).get('chunk_size', 1000)
+        input_file_path = config['system']['io']['input']['file']
+
+        if not os.path.exists(input_file_path):
+            raise FileNotFoundError(f"Input file not found: {input_file_path}")
+
+        processed_count = 0
+        try:
+            with open(input_file_path, 'r', encoding='utf-8') as f:
+                chunk: list[Dict[str, Any]] = []
+                for line in f:
+                    try:
+                        record = json.loads(line)
+                        chunk.append(record)
+                        
+                        if len(chunk) >= chunk_size:
+                            process_chunk(entity_mediator, chunk)
+                            processed_count += len(chunk)
+                            logger.info(f"Processed {processed_count} records")
+                            chunk = []  # Clear the chunk
+                            
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Invalid JSON in line: {e}")
+                        continue
+
+                # Process remaining records
+                if chunk:
+                    process_chunk(entity_mediator, chunk)
+                    processed_count += len(chunk)
+                    logger.info(f"Processed {processed_count} total records")
+
+        except Exception as e:
+            logger.error(f"Processing failed: {str(e)}")
+            raise
+
+    finally:
+        # Clean up resources
+        entity_mediator.cleanup()
+
+def get_config_path(cli_config: Optional[str] = None) -> str:
+    """
+    Get configuration file path based on priority:
+    1. Command line argument
+    2. Environment variable
+    3. Default in-code path
+    """
+    if cli_config and os.path.exists(cli_config):
+        return cli_config
         
-    Returns:
-        Path to configuration file
-    """
-    if cmd_arg:
-        # Command line argument takes highest precedence
-        return cmd_arg
-    
-    # Check environment variable
-    env_config = os.environ.get(CONFIG_ENV_VAR)
-    if (env_config):
+    env_config = os.getenv(CONFIG_ENV_VAR)
+    if env_config and os.path.exists(env_config):
         return env_config
         
-    # Fall back to default
-    return DEFAULT_CONFIG
+    if os.path.exists(DEFAULT_CONFIG_PATH):
+        return str(DEFAULT_CONFIG_PATH)
+        
+    raise ConfigurationError(
+        f"No valid configuration file found. Checked:\n"
+        f"  - CLI argument: {cli_config or 'Not provided'}\n"
+        f"  - Environment variable {CONFIG_ENV_VAR}: {env_config or 'Not set'}\n"
+        f"  - Default path: {DEFAULT_CONFIG_PATH}"
+    )
 
-def validate_configuration(config_path, verbose=False):
-    """Validate configuration file."""
-    logger = get_logger(__name__)
-    logger.info(f"Validating configuration file: {config_path}")
+def main() -> None:
+    """Main entry point."""
+    colorama.init()
     
-    print(f"{Fore.CYAN}Validating configuration file: {config_path}{Style.RESET_ALL}")
-    
-    # Create validator and validate configuration
-    validator = ConfigValidator(ROOT_CONFIG_SCHEMA)
-    errors = validator.validate_file(config_path)
-    
-    if errors:
-        print(f"{Fore.RED}❌ Configuration validation failed:{Style.RESET_ALL}")
-        for error in errors:
-            print(f"  • [{error.severity.upper()}] {error.path}: {error.message}")
-        return False
-        
-    # Run startup validation if config validation passed
-    startup_validator = StartupValidator(validator)
-    if not startup_validator.run_checks():
-        print(f"{Fore.RED}❌ Startup validation failed:{Style.RESET_ALL}")
-        for message in startup_validator.get_messages():
-            print(f"  • {message}")
-        return False
-        
-    print(f"{Fore.GREEN}✓ Configuration is valid!{Style.RESET_ALL}")
-    if verbose:
-        print("\nConfiguration sections validated:")
-        print("  • system")
-        print("  • validation_groups")
-        print("  • data_dictionary")
-        print("  • field_properties")
-        print("  • entities")
-        print("  • relationships")
-        print("  • security")
-    return True
-
-def run_data_validation(config_path, skip_invalid=False):
-    """Run validation on USASpending data."""
-    logger = get_logger(__name__)
-    logger.info("Starting data validation")
-    
-    try:
-        config_manager = ConfigManager(config_path)
-        config = config_manager.config
-        
-        # Override skip_invalid_rows if specified
-        if skip_invalid:
-            if 'contracts' not in config:
-                config['contracts'] = {}
-            if 'input' not in config['contracts']:
-                config['contracts']['input'] = {}
-            config['contracts']['input']['skip_invalid_rows'] = True
-        
-        # Ensure validation is enabled
-        if 'contracts' not in config:
-            config['contracts'] = {}
-        if 'input' not in config['contracts']:
-            config['contracts']['input'] = {}
-        config['contracts']['input']['validate_input'] = True
-        
-        # Run validation
-        logger.info("Starting validation process...")
-        success = validate_data(config)
-        
-        if success:
-            logger.info("Validation completed successfully!")
-            print(f"{Fore.GREEN}✓ Data validation completed successfully!{Style.RESET_ALL}")
-            return True
-        else:
-            logger.error("Validation failed!")
-            print(f"{Fore.RED}❌ Data validation failed!{Style.RESET_ALL}")
-            return False
-        
-    except Exception as e:
-        logger.error(f"Error during validation: {str(e)}", exc_info=True)
-        print(f"{Fore.RED}❌ Error during validation: {str(e)}{Style.RESET_ALL}")
-        return False
-
-def main() -> int:
-    """Process USASpending transaction data."""
-    colorama.init()  # Initialize colorama for colored output
-    
-    parser = argparse.ArgumentParser(description="Process and validate USASpending data")
-    parser.add_argument(
-        "--config", 
-        default=None,  # Changed from hardcoded default to None
-        help=f"Path to configuration file (overrides {CONFIG_ENV_VAR} environment variable and default '{DEFAULT_CONFIG}')"
-    )
-    
-    # Validation arguments
-    validation_group = parser.add_argument_group('Validation Options')
-    validation_group.add_argument(
-        "--validate-config-only", 
-        action="store_true", 
-        help="Only validate configuration file without processing data"
-    )
-    validation_group.add_argument(
-        "--validate-data-only", 
-        action="store_true", 
-        help="Only validate data without processing"
-    )
-    validation_group.add_argument(
-        "--skip-validation", 
-        action="store_true", 
-        help="Skip all validation checks and proceed with processing"
-    )
-    validation_group.add_argument(
-        "--skip-invalid", 
-        action="store_true", 
-        help="Skip invalid records instead of failing"
-    )
-    validation_group.add_argument(
-        "--print-schema", 
-        action="store_true", 
-        help="Print expected schema structure and exit"
-    )
-    validation_group.add_argument(
-        "--verbose", "-v", 
-        action="store_true",
-        help="Show detailed validation information"
-    )
-    
-    # Logging arguments
-    logging_group = parser.add_argument_group('Logging Options')
-    logging_group.add_argument(
-        "--log-level", 
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        default="INFO", 
-        help="Set the logging level"
-    )
-    logging_group.add_argument('--log-file', help='Path to log file')
-    logging_group.add_argument('--debug-file', help='Path to debug log file')
-    
+    parser = argparse.ArgumentParser(description="Process USASpending transaction data")
+    parser.add_argument('--config', help=f'Path to configuration file (default: {DEFAULT_CONFIG_PATH})')
+    parser.add_argument('--input', help='Input file path (overrides config)')
     args = parser.parse_args()
-    
-    # Determine config path using precedence order
-    config_path = get_config_path(args.config)
-    
-    # Initialize logging before any other operations
-    configure_logging(
-        level=args.log_level,
-        output_file=args.log_file,
-        debug_file=args.debug_file
-    )
-    
-    logger = get_logger(__name__)
-    logger.info(f"Starting USASpending data processing with config: {config_path}")
-    
+
     try:
-        # Handle print schema request
-        if args.print_schema:
-            print(json.dumps(ROOT_CONFIG_SCHEMA, indent=2))
-            return 0
-            
-        # Validate configuration first
-        config_valid = True
-        if not args.skip_validation:
-            config_valid = validate_configuration(config_path, args.verbose)
-            if not config_valid and not args.validate_config_only:
-                logger.error("Configuration validation failed, aborting")
-                return 1
-        
-        # Exit if only validating config
-        if args.validate_config_only:
-            return 0 if config_valid else 1
-            
-        # Validate data if requested
-        if args.validate_data_only and not args.skip_validation:
-            data_valid = run_data_validation(config_path, args.skip_invalid)
-            return 0 if data_valid else 1
-        
-        # Otherwise process the data
-        logger.info("Starting data processing...")
-        
-        # Apply configuration overrides
-        config_manager = ConfigManager(config_path)
-        config = config_manager.config
-        
-        # Enable validation unless explicitly skipped
-        if not args.skip_validation:
-            if 'contracts' not in config:
-                config['contracts'] = {}
-            if 'input' not in config['contracts']:
-                config['contracts']['input'] = {}
-            config['contracts']['input']['validate_input'] = True
-            config['contracts']['input']['skip_invalid_rows'] = args.skip_invalid
-        
-        # Process the data
-        success = convert_csv_to_json(config_manager)
-        
-        if success:
-            logger.info("Data processing completed successfully")
-            print(f"{Fore.GREEN}✓ Data processing completed successfully!{Style.RESET_ALL}")
-            return 0
-        else:
-            logger.error("Data processing failed")
-            print(f"{Fore.RED}❌ Data processing failed!{Style.RESET_ALL}")
-            return 1
-            
-    except ConfigurationError as e:
-        logger.error("Configuration error", exc_info=True)
-        print(f"{Fore.RED}❌ Configuration error: {str(e)}{Style.RESET_ALL}")
-        return 1
-        
+        config_path = get_config_path(args.config)
+        process_transactions(config_path, args.input)
+        print(f"{Fore.GREEN}Processing completed successfully{Style.RESET_ALL}")
+
     except Exception as e:
-        logger.error("Error occurred", exc_info=True)
-        print(f"{Fore.RED}❌ Error: {str(e)}{Style.RESET_ALL}")
-        return 1
+        print(f"{Fore.RED}Error: {str(e)}{Style.RESET_ALL}")
+        sys.exit(1)
 
-if __name__ == "__main__":
-    sys.exit(main())
-
-"""Process transactions module for USASpending data."""
-
-def process_transaction(transaction_data):
-    """Process a single transaction."""
-    pass
-
-def process_transactions(transactions_data):
-    """Process multiple transactions."""
-    return [process_transaction(t) for t in transactions_data]
+if __name__ == '__main__':
+    main()
