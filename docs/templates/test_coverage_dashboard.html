@@ -13,9 +13,55 @@
         .metric-value.success { color: #00a91c; }
         .metric-value.warning { color: #ffbe2e; }
         .metric-value.error { color: #d54309; }
+        .loading { text-align: center; padding: 2rem; }
+        .loading::after {
+            content: "...";
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: "."; }
+            40% { content: ".."; }
+            60%, 100% { content: "..."; }
+        }
+        #dashboard-container.loaded .loading { display: none; }
+        #dashboard-container:not(.loaded) .dashboard-content { display: none; }
+        /* Sample data notification styles */
+        .sample-data-banner {
+            background-color: #e41d3d;
+            color: white;
+            text-align: center;
+            padding: 10px;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        .sample-data-badge {
+            display: inline-block;
+            background-color: #e41d3d;
+            color: white;
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+        .debug-info { 
+            padding: 10px; 
+            background: #f0f0f0; 
+            border: 1px solid #ccc; 
+            margin-top: 20px;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
     </style>
 </head>
 <body>
+    <!-- Sample data notification banner -->
+    <div id="sample-data-banner" class="sample-data-banner" style="display: none;">
+        NOTICE: This dashboard is displaying SAMPLE DATA, not actual test results
+    </div>
+    
     <a class="usa-skipnav" href="#main-content">Skip to main content</a>
     
     <div class="usa-overlay"></div>
@@ -44,124 +90,141 @@
                     <li class="usa-nav__primary-item">
                         <a href="#module-coverage" class="usa-nav__link">Module Coverage</a>
                     </li>
+                    <li class="usa-nav__primary-item">
+                        <a href="#functional-coverage" class="usa-nav__link">Functional Coverage</a>
+                    </li>
+                    <li class="usa-nav__primary-item">
+                        <a href="#test-gaps" class="usa-nav__link">Test Gaps</a>
+                    </li>
                 </ul>
             </div>
         </nav>
     </header>
 
     <main id="main-content" class="usa-layout-docs usa-section">
-        <div class="grid-container">
-            <div class="usa-alert usa-alert--info" role="status">
-                <div class="usa-alert__body">
-                    <h4 class="usa-alert__heading">Dashboard Status</h4>
-                    <p class="usa-alert__text">Generated on {{ generation_time }}</p>
+        <div id="dashboard-container" class="grid-container">
+            <div class="loading">Loading dashboard data</div>
+            
+            <div class="dashboard-content">
+                <div class="usa-alert usa-alert--info" role="status">
+                    <div class="usa-alert__body">
+                        <h4 class="usa-alert__heading">Dashboard Status</h4>
+                        <p class="usa-alert__text">Generated on <span id="generation-time"></span></p>
+                        <p id="data-source-info" class="usa-alert__text"></p>
+                    </div>
                 </div>
+                
+                <section id="coverage-summary" class="padding-top-4">
+                    <h1 class="usa-heading">Test Coverage Summary</h1>
+                    
+                    <div class="grid-row grid-gap margin-top-4">
+                        <div class="tablet:grid-col-3">
+                            <div class="usa-card">
+                                <div class="usa-card__container">
+                                    <header class="usa-card__header">
+                                        <h2 class="usa-card__heading">Coverage</h2>
+                                    </header>
+                                    <div class="usa-card__body">
+                                        <span id="total-coverage" class="metric-value">--</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="tablet:grid-col-3">
+                            <div class="usa-card">
+                                <div class="usa-card__container">
+                                    <header class="usa-card__header">
+                                        <h2 class="usa-card__heading">Test Quality</h2>
+                                    </header>
+                                    <div class="usa-card__body">
+                                        <span id="test-quality-score" class="metric-value">--</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="tablet:grid-col-3">
+                            <div class="usa-card">
+                                <div class="usa-card__container">
+                                    <header class="usa-card__header">
+                                        <h2 class="usa-card__heading">Modules Needing Tests</h2>
+                                    </header>
+                                    <div class="usa-card__body">
+                                        <span id="modules-without-tests" class="metric-value">--</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="tablet:grid-col-3">
+                            <div class="usa-card">
+                                <div class="usa-card__container">
+                                    <header class="usa-card__header">
+                                        <h2 class="usa-card__heading">Validation Status</h2>
+                                    </header>
+                                    <div class="usa-card__body">
+                                        <span id="validation-status" class="metric-value">--</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="usa-prose margin-top-4">
+                        <div class="border-base-lighter border-2px padding-2" style="height: 300px">
+                            <canvas id="coverageTrendChart"></canvas>
+                        </div>
+                    </div>
+                </section>
+                
+                <section id="validation-results" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                    <h2 class="usa-heading">Validation Results</h2>
+                    <div id="validation-checks-container">
+                        <div class="loading">Loading validation data</div>
+                    </div>
+                </section>
+                
+                <section id="module-coverage" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                    <h2 class="usa-heading">Coverage by Module</h2>
+                    <div class="usa-table-container--scrollable">
+                        <table class="usa-table usa-table--borderless">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Module</th>
+                                    <th scope="col" class="text-center">Coverage</th>
+                                    <th scope="col" class="text-right">Missing Lines</th>
+                                </tr>
+                            </thead>
+                            <tbody id="module-coverage-table">
+                                <tr>
+                                    <td colspan="3" class="loading">Loading module coverage data</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section id="functional-coverage" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                    <h2 class="usa-heading">Functional Coverage</h2>
+                    <div id="functional-coverage-content">
+                        <div class="loading">Loading functional coverage data</div>
+                    </div>
+                </section>
+
+                <section id="test-gaps" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                    <h2 class="usa-heading">Modules Needing Tests</h2>
+                    <div id="test-gaps-content">
+                        <div class="loading">Loading test gap data</div>
+                    </div>
+                </section>
+
+                <section id="debug-info" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                    <h2 class="usa-heading">Troubleshooting Information</h2>
+                    <button id="toggle-debug" class="usa-button">Show Loading Details</button>
+                    <div id="debug-container" class="debug-info" style="display: none;"></div>
+                </section>
             </div>
-            
-            <section id="coverage-summary" class="padding-top-4">
-                <h1 class="usa-heading">Test Coverage Summary</h1>
-                
-                <div class="grid-row grid-gap margin-top-4">
-                    <div class="tablet:grid-col-3">
-                        <div class="usa-card">
-                            <div class="usa-card__container">
-                                <header class="usa-card__header">
-                                    <h2 class="usa-card__heading">Coverage</h2>
-                                </header>
-                                <div class="usa-card__body">
-                                    <span class="metric-value {{ coverage_status_class }}">{{ total_coverage }}%</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="tablet:grid-col-3">
-                        <div class="usa-card">
-                            <div class="usa-card__container">
-                                <header class="usa-card__header">
-                                    <h2 class="usa-card__heading">Test Quality</h2>
-                                </header>
-                                <div class="usa-card__body">
-                                    <span class="metric-value {{ quality_status_class }}">{{ test_quality_score }}</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="tablet:grid-col-3">
-                        <div class="usa-card">
-                            <div class="usa-card__container">
-                                <header class="usa-card__header">
-                                    <h2 class="usa-card__heading">Modules Needing Tests</h2>
-                                </header>
-                                <div class="usa-card__body">
-                                    <span class="metric-value {{ gaps_status_class }}">{{ modules_without_tests }}</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="tablet:grid-col-3">
-                        <div class="usa-card">
-                            <div class="usa-card__container">
-                                <header class="usa-card__header">
-                                    <h2 class="usa-card__heading">Validation Status</h2>
-                                </header>
-                                <div class="usa-card__body">
-                                    <span class="metric-value {{ validation_status_class }}">
-                                        {{ validation_status_icon }}
-                                    </span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="usa-prose margin-top-4">
-                    <div class="border-base-lighter border-2px padding-2" style="height: 300px">
-                        <canvas id="coverageTrendChart"></canvas>
-                    </div>
-                </div>
-            </section>
-            
-            <section id="validation-results" class="padding-top-4 border-top border-base-lighter margin-top-4">
-                <h2 class="usa-heading">Validation Results</h2>
-                {{ validation_checks_html | safe }}
-            </section>
-            
-            <section id="module-coverage" class="padding-top-4 border-top border-base-lighter margin-top-4">
-                <h2 class="usa-heading">Coverage by Module</h2>
-                <div class="usa-table-container--scrollable">
-                    <table class="usa-table usa-table--borderless">
-                        <thead>
-                            <tr>
-                                <th scope="col">Module</th>
-                                <th scope="col" class="text-center">Coverage</th>
-                                <th scope="col" class="text-right">Missing Lines</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {{ module_coverage_html | safe }}
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- Add functional coverage section -->
-            <section id="functional-coverage" class="padding-top-4 border-top border-base-lighter margin-top-4">
-                <h2 class="usa-heading">Functional Coverage</h2>
-                <div id="functional-coverage-content">
-                    {{ functional_coverage_html | safe }}
-                </div>
-            </section>
-
-            <!-- Add test gaps section if there are modules without tests -->
-            <section id="test-gaps" class="padding-top-4 border-top border-base-lighter margin-top-4">
-                <h2 class="usa-heading">Modules Needing Tests</h2>
-                <div id="test-gaps-content">
-                    {{ test_gaps_html | safe }}
-                </div>
-            </section>
         </div>
     </main>
     
@@ -184,62 +247,596 @@
     
     <script src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/js/uswds.min.js"></script>
     
-    <script>
-        // Initialize USWDS components
-        window.addEventListener('load', function() {
-            window.uswds = new USWDS();
-        });
+    <!-- Update paths to JavaScript files -->
+    <script src="./js/config.js"></script>
+    <script src="./js/data-loader.js"></script>
+    <script src="./js/coverage-chart.js"></script>
+    <script src="./js/validation-display.js"></script>
         
-        // Initialize chart data
-        const chartData = {{ chart_data }};
+        // Dashboard data container
+        const dashboardData = {
+            coverage: null,
+            quality: null,
+            gaps: null,
+            validation: null,
+            functional: null,
+            history: null
+        };
         
-        // Coverage Trend Chart
-        const coverageCtx = document.getElementById('coverageTrendChart').getContext('2d');
-        const coverageChart = new Chart(coverageCtx, {
-            type: 'line',
-            data: {
-                labels: chartData.dates,
-                datasets: [{
-                    label: 'Code Coverage %',
-                    data: chartData.coverage,
-                    backgroundColor: 'rgba(0, 113, 188, 0.2)',
-                    borderColor: '#005ea2',
-                    borderWidth: 2,
-                    pointBackgroundColor: '#005ea2',
-                    tension: 0.2
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: {
-                        beginAtZero: false,
-                        min: Math.max(0, Math.floor(Math.min(...chartData.coverage || [0]) - 10)),
-                        max: Math.min(100, Math.ceil(Math.max(...chartData.coverage || [100]) + 10)),
-                        title: {
-                            display: true,
-                            text: 'Coverage %'
+        // Debug info container
+        const debugInfo = {
+            loadStartTime: null,
+            loadEndTime: null,
+            fileStatuses: {},
+            isSampleData: false
+        };
+
+        // Sample data detection
+        function checkForSampleData() {
+            // Check for patterns that would indicate sample data
+            const sampleDataSignatures = [
+                // History dates in the future
+                () => {
+                    if (dashboardData.history && Array.isArray(dashboardData.history.dates)) {
+                        const futureDates = dashboardData.history.dates.filter(date => {
+                            const dateObj = new Date(date);
+                            return dateObj > new Date();
+                        });
+                        return futureDates.length > 0;
+                    }
+                    return false;
+                },
+                // Standard modules from sample data
+                () => {
+                    if (dashboardData.coverage && dashboardData.coverage.files) {
+                        const sampleModulePaths = [
+                            "src/usaspending/adapters/base.py",
+                            "src/usaspending/adapters/boolean_adapters.py",
+                            "src/usaspending/entities/entity_mapper.py"
+                        ];
+                        return sampleModulePaths.some(path => path in dashboardData.coverage.files);
+                    }
+                    return false;
+                },
+                // Exact coverage values from sample data
+                () => {
+                    if (dashboardData.coverage && dashboardData.coverage.totals) {
+                        return dashboardData.coverage.totals.percent_covered === 75.8;
+                    }
+                    return false;
+                }
+            ];
+
+            // Check each signature
+            for (const check of sampleDataSignatures) {
+                if (check()) {
+                    console.log("Sample data detected");
+                    debugInfo.isSampleData = true;
+                    return true;
+                }
+            }
+
+            console.log("No sample data detected - assuming real test results");
+            return false;
+        }
+
+        // Utility function to fetch JSON data with error handling
+        async function fetchJSON(url, label) {
+            console.log(`Fetching ${label} from ${url}`);
+            debugInfo.fileStatuses[label] = 'Fetching...';
+            
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    throw new Error(`HTTP error ${response.status}`);
+                }
+                
+                const data = await response.json();
+                debugInfo.fileStatuses[label] = 'Success';
+                console.log(`Successfully loaded ${label}`);
+                
+                return data;
+            } catch (error) {
+                debugInfo.fileStatuses[label] = `Error: ${error.message}`;
+                console.log(`Error fetching ${label}: ${error.message}`);
+                
+                // Try again with alternative paths
+                if (url.startsWith('./')) {
+                    const altUrl = url.substring(2); // Remove './'
+                    console.log(`Trying alternative path: ${altUrl}`);
+                    
+                    try {
+                        const response = await fetch(altUrl);
+                        if (!response.ok) {
+                            throw new Error(`HTTP error ${response.status}`);
+                        }
+                        
+                        const data = await response.json();
+                        debugInfo.fileStatuses[label] = 'Success (alternative path)';
+                        console.log(`Successfully loaded ${label} from alternative path`);
+                        
+                        return data;
+                    } catch (altError) {
+                        debugInfo.fileStatuses[label] = `Error with alt path: ${altError.message}`;
+                        console.log(`Error with alternative path for ${label}: ${altError.message}`);
+                    }
+                }
+                
+                return null;
+            }
+        }
+
+        // Load all required data files
+        async function loadDashboardData() {
+            console.log('Starting data load process');
+            debugInfo.loadStartTime = new Date();
+            
+            const basePaths = [
+                './', // Relative to current file
+                '/output/test_dashboard', // From root
+                'output/test_dashboard', // From project root
+                '../', // One level up
+                '../../', // Two levels up
+            ];
+            
+            // List of files to try loading from each base path
+            const filesToLoad = [
+                { name: 'coverage', path: 'coverage/coverage.json' },
+                { name: 'quality', path: 'test_quality/test_quality_report.json' },
+                { name: 'gaps', path: 'coverage/test_gap_report.json' },
+                { name: 'validation', path: 'validation/validation_report.json' },
+                { name: 'functional', path: 'coverage/functional_coverage_report.json' },
+                { name: 'history', path: 'coverage_history.json' }
+            ];
+            
+            // Try loading each file from each base path until successful
+            for (const file of filesToLoad) {
+                let loaded = false;
+                
+                // Log which file we're loading
+                console.log(`Attempting to load ${file.name} data`);
+                
+                // Try each base path
+                for (const basePath of basePaths) {
+                    if (loaded) continue;
+                    
+                    const url = `${basePath}${file.path}`;
+                    const data = await fetchJSON(url, `${file.name} (${basePath})`);
+                    
+                    if (data) {
+                        dashboardData[file.name] = data;
+                        loaded = true;
+                        console.log(`Successfully loaded ${file.name} from ${url}`);
+                        break;
+                    }
+                }
+                
+                if (!loaded) {
+                    console.log(`Failed to load ${file.name} from all paths`);
+                }
+            }
+            
+            debugInfo.loadEndTime = new Date();
+            console.log(`Data loading completed in ${debugInfo.loadEndTime - debugInfo.loadStartTime}ms`);
+            
+            // Check if we're using sample data
+            checkForSampleData();
+            if (debugInfo.isSampleData) {
+                document.getElementById('sample-data-banner').style.display = 'block';
+                document.getElementById('data-source-info').innerHTML = '<strong class="usa-alert__text--warning">⚠️ SAMPLE DATA</strong> - This dashboard is displaying example data, not actual test results';
+            } else {
+                document.getElementById('data-source-info').textContent = 'Using actual test results from the latest test run';
+            }
+            
+            // Continue with rendering even if some data is missing
+            renderDashboard();
+        }
+
+        // Render the dashboard with available data
+        function renderDashboard() {
+            console.log('Rendering dashboard with available data');
+            
+            // Check if any data was loaded
+            const hasAnyData = Object.values(dashboardData).some(value => value !== null);
+            if (!hasAnyData) {
+                console.log('WARNING: No data was successfully loaded');
+                
+                // Show a prominent error message
+                const container = document.getElementById('dashboard-container');
+                container.innerHTML = `
+                    <div class="usa-alert usa-alert--error" role="alert">
+                        <div class="usa-alert__body">
+                            <h4 class="usa-alert__heading">Error Loading Dashboard Data</h4>
+                            <p class="usa-alert__text">
+                                Unable to load any dashboard data. This could be due to:
+                                <ul>
+                                    <li>Missing data files - tests have not been run</li>
+                                    <li>File permission issues</li>
+                                    <li>Network connectivity issues</li>
+                                </ul>
+                            </p>
+                            <button class="usa-button" id="show-debug-btn">Show Technical Details</button>
+                        </div>
+                    </div>
+                    <div id="tech-debug-info" class="debug-info" style="display: none;"></div>
+                `;
+                
+                // Add event listener for the debug button
+                document.getElementById('show-debug-btn').addEventListener('click', function() {
+                    const debugElem = document.getElementById('tech-debug-info');
+                    debugElem.style.display = 'block';
+                    debugElem.innerHTML = `<h4>File Status:</h4>
+                        <pre>${JSON.stringify(debugInfo.fileStatuses, null, 2)}</pre>`;
+                });
+                
+                return;
+            }
+            
+            // Set current time
+            document.getElementById('generation-time').textContent = new Date().toLocaleString();
+            
+            // Render summary metrics
+            renderSummaryMetrics();
+            
+            // Render validation results
+            renderValidationResults();
+            
+            // Render module coverage table
+            renderModuleCoverage();
+            
+            // Render functional coverage
+            renderFunctionalCoverage();
+            
+            // Render test gaps
+            renderTestGaps();
+            
+            // Render coverage trend chart
+            renderCoverageTrendChart();
+            
+            // Mark dashboard as loaded
+            document.getElementById('dashboard-container').classList.add('loaded');
+        }
+
+        // Render the summary metrics cards
+        function renderSummaryMetrics() {
+            // Coverage percentage
+            const coverageElement = document.getElementById('total-coverage');
+            const coverageValue = dashboardData.coverage?.totals?.percent_covered || 0;
+            const coverageClass = getStatusClass(coverageValue, 70, 50);
+            coverageElement.textContent = `${coverageValue.toFixed(1)}%`;
+            coverageElement.className = `metric-value ${coverageClass}`;
+            
+            // Test quality score
+            const qualityElement = document.getElementById('test-quality-score');
+            const qualityValue = dashboardData.quality?.overall_quality_score || 0;
+            const qualityClass = getStatusClass(qualityValue, 60, 40);
+            qualityElement.textContent = qualityValue.toFixed(1);
+            qualityElement.className = `metric-value ${qualityClass}`;
+            
+            // Modules without tests
+            const gapsElement = document.getElementById('modules-without-tests');
+            const gapsValue = Array.isArray(dashboardData.gaps) ? dashboardData.gaps.length : 0;
+            const gapsClass = gapsValue === 0 ? 'success' : 'error';
+            gapsElement.textContent = gapsValue;
+            gapsElement.className = `metric-value ${gapsClass}`;
+            
+            // Validation status
+            const validationElement = document.getElementById('validation-status');
+            const validationPassed = dashboardData.validation?.validation_summary?.passed || false;
+            const validationClass = validationPassed ? 'success' : 'error';
+            const validationIcon = validationPassed ? '✓' : '✗';
+            validationElement.textContent = validationIcon;
+            validationElement.className = `metric-value ${validationClass}`;
+        }
+
+        // Render validation results
+        function renderValidationResults() {
+            const container = document.getElementById('validation-checks-container');
+            container.innerHTML = '';
+            
+            if (!dashboardData.validation?.validation_summary?.validation_checks) {
+                // Display coverage threshold check as a fallback
+                const coverageValue = dashboardData.coverage?.totals?.percent_covered || 0;
+                const coveragePassed = coverageValue >= 70;
+                
+                const alert = document.createElement('div');
+                alert.className = `usa-alert usa-alert--${coveragePassed ? 'success' : 'error'} margin-bottom-2`;
+                alert.setAttribute('role', 'status');
+                alert.innerHTML = `
+                    <div class="usa-alert__body">
+                        <p class="usa-alert__text">${coveragePassed ? '✓' : '✗'} Coverage is ${coverageValue.toFixed(1)}% (threshold: 70%)</p>
+                    </div>
+                `;
+                container.appendChild(alert);
+                
+                // Display quality threshold check as a fallback
+                const qualityValue = dashboardData.quality?.overall_quality_score || 0;
+                const qualityPassed = qualityValue >= 60;
+                
+                const qualityAlert = document.createElement('div');
+                qualityAlert.className = `usa-alert usa-alert--${qualityPassed ? 'success' : 'error'} margin-bottom-2`;
+                qualityAlert.setAttribute('role', 'status');
+                qualityAlert.innerHTML = `
+                    <div class="usa-alert__body">
+                        <p class="usa-alert__text">${qualityPassed ? '✓' : '✗'} Test quality score is ${qualityValue.toFixed(1)} (threshold: 60)</p>
+                    </div>
+                `;
+                container.appendChild(qualityAlert);
+                
+                return;
+            }
+            
+            // Render validation checks from the data
+            dashboardData.validation.validation_summary.validation_checks.forEach(check => {
+                const alert = document.createElement('div');
+                alert.className = `usa-alert usa-alert--${check.passed ? 'success' : 'error'} margin-bottom-2`;
+                alert.setAttribute('role', 'status');
+                alert.innerHTML = `
+                    <div class="usa-alert__body">
+                        <p class="usa-alert__text">${check.passed ? '✓' : '✗'} ${check.message}</p>
+                    </div>
+                `;
+                container.appendChild(alert);
+            });
+        }
+
+        // Render module coverage table
+        function renderModuleCoverage() {
+            const tableBody = document.getElementById('module-coverage-table');
+            tableBody.innerHTML = '';
+            
+            if (!dashboardData.coverage?.files) {
+                const row = document.createElement('tr');
+                row.innerHTML = '<td colspan="3" class="text-center">No coverage data available</td>';
+                tableBody.appendChild(row);
+                return;
+            }
+            
+            // Convert files object to array and sort by coverage percentage
+            const files = Object.entries(dashboardData.coverage.files)
+                .map(([path, info]) => ({
+                    path,
+                    coverage: info.summary.percent_covered,
+                    missingLines: info.missing_lines ? info.missing_lines.length : 0
+                }))
+                .sort((a, b) => a.coverage - b.coverage);
+            
+            // Create table rows for each file
+            files.forEach(file => {
+                const row = document.createElement('tr');
+                const statusClass = getStatusClass(file.coverage);
+                
+                row.innerHTML = `
+                    <th scope="row" class="font-mono-sm">${file.path}</th>
+                    <td class="text-center">
+                        <span class="usa-tag usa-tag--big metric-value ${statusClass}" style="font-size: 1rem">
+                            ${file.coverage.toFixed(1)}%
+                        </span>
+                    </td>
+                    <td class="text-right font-mono-sm">${file.missingLines}</td>
+                `;
+                
+                tableBody.appendChild(row);
+            });
+        }
+
+        // Render functional coverage cards
+        function renderFunctionalCoverage() {
+            const container = document.getElementById('functional-coverage-content');
+            container.innerHTML = '';
+            
+            if (!dashboardData.functional?.features) {
+                const alert = document.createElement('div');
+                alert.className = 'usa-alert usa-alert--info';
+                alert.setAttribute('role', 'status');
+                alert.innerHTML = `
+                    <div class="usa-alert__body">
+                        <p class="usa-alert__text">No functional coverage data available</p>
+                    </div>
+                `;
+                container.appendChild(alert);
+                return;
+            }
+            
+            // Create grid container
+            const grid = document.createElement('div');
+            grid.className = 'grid-row grid-gap';
+            
+            // Process features recursively
+            const processFeature = (name, details, depth = 0) => {
+                const coveragePct = details.coverage_percent || 0;
+                const statusClass = getStatusClass(coveragePct);
+                const indent = '&nbsp;'.repeat(depth * 4);
+                
+                // Create card column
+                const col = document.createElement('div');
+                col.className = 'tablet:grid-col-4 margin-bottom-2';
+                
+                // Create card content
+                let cardHTML = `
+                    <div class="usa-card">
+                        <div class="usa-card__container">
+                            <header class="usa-card__header">
+                                <h3 class="usa-card__heading">${indent}${name}</h3>
+                            </header>
+                            <div class="usa-card__body">
+                                <span class="metric-value ${statusClass}">${coveragePct.toFixed(1)}%</span>
+                `;
+                
+                if (details.scenarios) {
+                    const totalScenarios = details.scenarios.length;
+                    const automatedScenarios = details.scenarios.filter(s => s.automated).length;
+                    const manualScenarios = totalScenarios - automatedScenarios;
+                    
+                    cardHTML += `
+                        <p>
+                            Total Scenarios: ${totalScenarios}<br>
+                            Automated: ${automatedScenarios}<br>
+                            Manual: ${manualScenarios}
+                        </p>
+                    `;
+                }
+                
+                cardHTML += `
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                col.innerHTML = cardHTML;
+                grid.appendChild(col);
+                
+                // Process subfeatures if any
+                if (details.subfeatures) {
+                    Object.entries(details.subfeatures).forEach(([subname, subdetails]) => {
+                        processFeature(subname, subdetails, depth + 1);
+                    });
+                }
+            };
+            
+            // Process all features
+            Object.entries(dashboardData.functional.features).forEach(([name, details]) => {
+                processFeature(name, details);
+            });
+            
+            container.appendChild(grid);
+        }
+
+        // Render test gaps
+        function renderTestGaps() {
+            const container = document.getElementById('test-gaps-content');
+            container.innerHTML = '';
+            
+            if (!Array.isArray(dashboardData.gaps) || dashboardData.gaps.length === 0) {
+                const alert = document.createElement('div');
+                alert.className = 'usa-alert usa-alert--info';
+                alert.setAttribute('role', 'status');
+                alert.innerHTML = `
+                    <div class="usa-alert__body">
+                        <p class="usa-alert__text">No test gap data available</p>
+                    </div>
+                `;
+                container.appendChild(alert);
+                return;
+            }
+            
+            // Create table container
+            const tableContainer = document.createElement('div');
+            tableContainer.className = 'usa-table-container--scrollable';
+            
+            // Create table
+            let tableHTML = `
+                <table class="usa-table usa-table--striped">
+                    <thead>
+                        <tr>
+                            <th scope="col">Module</th>
+                            <th scope="col">Priority</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            
+            // Add rows for each module with test gaps
+            dashboardData.gaps.forEach(module => {
+                const moduleName = module.module || 'Unknown';
+                const priority = module.priority === 'high' ? 'High' : 'Medium';
+                
+                tableHTML += `
+                    <tr>
+                        <th scope="row">${moduleName}</th>
+                        <td>${priority}</td>
+                    </tr>
+                `;
+            });
+            
+            tableHTML += `
+                    </tbody>
+                </table>
+            `;
+            
+            tableContainer.innerHTML = tableHTML;
+            container.appendChild(tableContainer);
+        }
+
+        // Render coverage trend chart
+        function renderCoverageTrendChart() {
+            const chartData = dashboardData.history || { dates: [], coverage: [] };
+            
+            // Get chart context
+            const coverageCtx = document.getElementById('coverageTrendChart').getContext('2d');
+            
+            // Create chart
+            const coverageChart = new Chart(coverageCtx, {
+                type: 'line',
+                data: {
+                    labels: chartData.dates,
+                    datasets: [{
+                        label: 'Code Coverage %',
+                        data: chartData.coverage,
+                        backgroundColor: 'rgba(0, 113, 188, 0.2)',
+                        borderColor: '#005ea2',
+                        borderWidth: 2,
+                        pointBackgroundColor: '#005ea2',
+                        tension: 0.2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            min: Math.max(0, Math.floor(Math.min(...(chartData.coverage || [0])) - 10)),
+                            max: Math.min(100, Math.ceil(Math.max(...(chartData.coverage || [100])) + 10)),
+                            title: {
+                                display: true,
+                                text: 'Coverage %'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Date'
+                            }
                         }
                     },
-                    x: {
-                        title: {
-                            display: true,
-                            text: 'Date'
-                        }
-                    }
-                },
-                plugins: {
-                    tooltip: {
-                        callbacks: {
-                            label: function(context) {
-                                return `Coverage: ${context.raw}%`;
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return `Coverage: ${context.raw}%`;
+                                }
                             }
                         }
                     }
                 }
+            });
+        }
+
+        // Utility function to log debug information
+        function logDebug(message) {
+            const debugContainer = document.getElementById('debug-container');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            debugContainer.appendChild(logEntry);
+            console.log(`[DEBUG] ${message}`);
+        }
+
+        // Set up debug toggles
+        document.getElementById('toggle-debug').addEventListener('click', function() {
+            const debugContainer = document.getElementById('debug-container');
+            if (debugContainer.style.display === 'none') {
+                debugContainer.style.display = 'block';
+                this.textContent = 'Hide Loading Details';
+            } else {
+                debugContainer.style.display = 'none';
+                this.textContent = 'Show Loading Details';
             }
         });
+
+        // Start loading data when the page loads
+        document.addEventListener('DOMContentLoaded', loadDashboardData);
     </script>
 </body>
 </html>

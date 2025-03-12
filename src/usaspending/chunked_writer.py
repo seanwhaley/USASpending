@@ -1,17 +1,19 @@
 """Chunked writing system for efficient batch processing of entities."""
-from typing import Dict, Any, List, Optional, Iterator, Generic, TypeVar
+from typing import Dict, Any, List, Optional, Iterator, Generic, TypeVar, cast, Union
 from abc import ABC, abstractmethod
 import threading
 from queue import Queue, Empty
 from concurrent.futures import ThreadPoolExecutor
 import time
 
-from .interfaces import IEntityStore, IEntitySerializer
-from .logging_config import get_logger
+from .core.interfaces import IEntityStore
+from .core.logging_config import get_logger
+from .core.entity_serializer import IEntitySerializer, EntitySerializer
+from .core.types import EntityData, EntityType, DataclassProtocol
 
 logger = get_logger(__name__)
 
-T = TypeVar('T')
+T = TypeVar('T', bound=DataclassProtocol)
 
 class IChunkedWriter(ABC, Generic[T]):
     """Interface for chunked writing operations."""
@@ -34,7 +36,7 @@ class IChunkedWriter(ABC, Generic[T]):
 class ChunkedWriter(IChunkedWriter[T]):
     """Processes and writes entities in chunks."""
     
-    def __init__(self, store: IEntityStore[T], serializer: IEntitySerializer[T],
+    def __init__(self, store: IEntityStore, serializer: IEntitySerializer[T],
                  chunk_size: int = 1000, max_retries: int = 3,
                  worker_threads: int = 4):
         """Initialize writer with store and configuration."""
@@ -56,46 +58,59 @@ class ChunkedWriter(IChunkedWriter[T]):
         self._queue: Queue[List[T]] = Queue()
         self._executor = ThreadPoolExecutor(max_workers=worker_threads)
         self._processing = False
+
+    def _write_chunk_with_retry(self, chunk: List[T]) -> None:
+        """Write chunk with retry logic."""
+        retry_count = 0
+        failed_entities = []
+        successful_count = 0
         
-    def write_chunk(self, entities: List[T]) -> bool:
-        """Write a chunk of entities."""
-        if not entities:
-            return True
+        while retry_count < self.max_retries and chunk:
+            remaining_entities = []
             
+            try:
+                # Process each entity in chunk
+                for entity in chunk:
+                    try:
+                        # Serialize if needed
+                        data = self.serializer.to_dict(entity) if hasattr(entity, '__dict__') else cast(Dict[str, Any], entity)
+                        
+                        # Save to store using proper EntityType
+                        self.store.save_entity(
+                            cast(EntityType, self.serializer.entity_type),
+                            cast(EntityData, data)
+                        )
+                        successful_count += 1
+                    except Exception as e:
+                        # Track failed entity for retry
+                        remaining_entities.append(entity)
+                        logger.error(f"Entity write failed: {str(e)}")
+                
+                # Update chunk to only include failed entities
+                chunk = remaining_entities
+
+            except Exception as e:
+                retry_count += 1
+                chunk = chunk  # Keep all entities for retry
+                
+                with self._lock:
+                    self.stats['retries'] += 1
+                    
+                if retry_count >= self.max_retries:
+                    logger.error(
+                        f"Failed to write chunk after {retry_count} retries: {e}"
+                    )
+                    failed_entities = chunk
+                else:
+                    backoff = min(5, retry_count)  # Cap maximum backoff
+                    time.sleep(backoff)
+
+        # Update stats once at the end
         with self._lock:
-            self.stats['total_entities'] += len(entities)
-            
-        # Add to buffer
-        self.buffer.extend(entities)
-        
-        # Process buffer if it reaches chunk size
-        if len(self.buffer) >= self.chunk_size:
-            return self._process_buffer()
-            
-        return True
-        
-    def flush(self) -> None:
-        """Flush any remaining entities in buffer."""
-        if self.buffer:
-            self._process_buffer()
-            
-        # Wait for all processing to complete
-        self._wait_for_processing()
-        
-    def get_stats(self) -> Dict[str, Any]:
-        """Get writing statistics."""
-        with self._lock:
-            stats = dict(self.stats)
-            
-        # Calculate success rate
-        total = stats['successful_writes'] + stats['failed_writes']
-        if total > 0:
-            stats['success_rate'] = round(
-                (stats['successful_writes'] / total) * 100, 2
-            )
-            
-        return stats
-        
+            self.stats['successful_writes'] += successful_count
+            self.stats['failed_writes'] += len(failed_entities)
+            self.stats['chunks_processed'] += 1
+
     def _process_buffer(self) -> bool:
         """Process current buffer."""
         if not self.buffer:
@@ -104,7 +119,7 @@ class ChunkedWriter(IChunkedWriter[T]):
         # Prepare chunk for processing
         chunk = self.buffer[:self.chunk_size]
         self.buffer = self.buffer[self.chunk_size:]
-        
+
         # Add to processing queue
         self._queue.put(chunk)
         
@@ -135,53 +150,44 @@ class ChunkedWriter(IChunkedWriter[T]):
             finally:
                 self._queue.task_done()
                 
-    def _write_chunk_with_retry(self, chunk: List[T]) -> None:
-        """Write chunk with retry logic."""
-        retry_count = 0
-        success = False
-        
-        while retry_count < self.max_retries and not success:
-            try:
-                # Process each entity in chunk
-                for entity in chunk:
-                    # Serialize if needed
-                    if hasattr(entity, '__dict__'):
-                        data = self.serializer.to_dict(entity)
-                    else:
-                        data = entity
-                        
-                    # Save to store
-                    entity_id = self.store.save(
-                        self.serializer.entity_type,
-                        data
-                    )
-                    
-                    if entity_id:
-                        with self._lock:
-                            self.stats['successful_writes'] += 1
-                    else:
-                        with self._lock:
-                            self.stats['failed_writes'] += 1
-                            
-                success = True
-                
-            except Exception as e:
-                retry_count += 1
-                with self._lock:
-                    self.stats['retries'] += 1
-                    
-                if retry_count >= self.max_retries:
-                    logger.error(
-                        f"Failed to write chunk after {retry_count} retries: {e}"
-                    )
-                    with self._lock:
-                        self.stats['failed_writes'] += len(chunk)
-                else:
-                    time.sleep(0.1 * (2 ** retry_count))  # Exponential backoff
-                    
-        with self._lock:
-            self.stats['chunks_processed'] += 1
+    def write_chunk(self, entities: List[T]) -> bool:
+        """Write a chunk of entities."""
+        if not entities:
+            return True
             
+        with self._lock:
+            self.stats['total_entities'] += len(entities)
+
+        # Add to buffer
+        self.buffer.extend(entities)
+        
+        # Process buffer if it reaches chunk size
+        if len(self.buffer) >= self.chunk_size:
+            return self._process_buffer()
+            
+        return True
+        
+    def flush(self) -> None:
+        """Flush any remaining entities in buffer."""
+        if self.buffer:
+            self._process_buffer()
+            
+        # Wait for all processing to complete
+        self._wait_for_processing()
+        
+    def get_stats(self) -> Dict[str, Any]:
+        """Get writing statistics."""
+        with self._lock:
+            stats = dict(self.stats)
+            
+        # Calculate success rate avoiding float conversion
+        total = stats['successful_writes'] + stats['failed_writes']
+        if total > 0:
+            success_rate = (stats['successful_writes'] * 100) // total
+            stats['success_rate'] = success_rate
+            
+        return stats
+        
     def _wait_for_processing(self) -> None:
         """Wait for all processing to complete."""
         self._queue.join()
@@ -249,3 +255,5 @@ class AsyncChunkedWriter(IChunkedWriter[T]):
                     self._queue.task_done()
             except Empty:
                 continue
+
+__all__ = ['ChunkedWriter', 'AsyncChunkedWriter']

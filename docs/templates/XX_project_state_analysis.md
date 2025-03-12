@@ -14,6 +14,57 @@ date: YYYY-MM-DD
 **Analysis Status**: [In Progress/Complete]  
 **Evidence Collection Status**: [percentage]
 
+## 1. Project Overview
+
+### 1.1 Project Description
+**MUST** provide a concise description of the project's purpose, goals, and scope.
+
+```
+[Provide a brief overview of what the project does, its main features, and its intended use cases]
+```
+
+### 1.2 Project Structure
+**MUST** include a hierarchical view of the project's primary folders and key files.
+
+```mermaid
+flowchart TD
+    Root["Project Root"] --> src["src/"]
+    Root --> tests["tests/"]
+    Root --> docs["docs/"]
+    Root --> config["Configuration Files"]
+    Root --> scripts["Scripts"]
+    
+    src --> packages["Main Packages"]
+    tests --> unit["Unit Tests"]
+    tests --> integration["Integration Tests"]
+    docs --> reports["Reports"]
+    docs --> templates["Templates"]
+    config --> env["Environment Config"]
+    config --> app["Application Config"]
+    scripts --> setup["Setup Scripts"]
+    scripts --> build["Build Scripts"]
+    
+    %% Customize with your actual project structure
+```
+
+### 1.3 Key Technologies
+**MUST** list all major technologies, languages, frameworks, and libraries used in the project.
+
+| Category | Technologies | Purpose | Version | Source Reference |
+|----------|-------------|---------|---------|-----------------|
+| Languages | | | | [File:Line] |
+| Frameworks | | | | [File:Line] |
+| Libraries | | | | [File:Line] |
+| Infrastructure | | | | [File:Line] |
+| Tools | | | | [File:Line] |
+
+### 1.4 Environment Setup
+**MUST** detail the environment setup requirements for the project.
+
+```
+[Describe the required environment setup, including dependencies, configuration files, and setup scripts]
+```
+
 ## YAML Configuration Analysis
 
 ### YAML File Overview
@@ -148,56 +199,6 @@ erDiagram
 - [ ] Dependency Analysis Complete
 - [ ] Code Quality Analysis Complete
 
-## 1. Project Overview
-
-### 1.1 Project Description
-**MUST** provide a concise description of the project's purpose, goals, and scope.
-
-```
-[Provide a brief overview of what the project does, its main features, and its intended use cases]
-```
-
-### 1.2 Project Structure
-**MUST** include a hierarchical view of the project's primary folders and key files.
-
-```mermaid
-flowchart TD
-    Root["Project Root"] --> src["src/"]
-    Root --> tests["tests/"]
-    Root --> docs["docs/"]
-    Root --> config["Configuration Files"]
-    Root --> scripts["Scripts"]
-    
-    src --> packages["Main Packages"]
-    tests --> unit["Unit Tests"]
-    tests --> integration["Integration Tests"]
-    docs --> reports["Reports"]
-    docs --> templates["Templates"]
-    config --> env["Environment Config"]
-    config --> app["Application Config"]
-    scripts --> setup["Setup Scripts"]
-    scripts --> build["Build Scripts"]
-    
-    %% Customize with your actual project structure
-```
-
-### 1.3 Key Technologies
-**MUST** list all major technologies, languages, frameworks, and libraries used in the project.
-
-| Category | Technologies | Purpose | Version | Source Reference |
-|----------|-------------|---------|---------|-----------------|
-| Languages | | | | [File:Line] |
-| Frameworks | | | | [File:Line] |
-| Libraries | | | | [File:Line] |
-| Infrastructure | | | | [File:Line] |
-| Tools | | | | [File:Line] |
-
-### 1.4 Environment Setup
-**MUST** detail the environment setup requirements for the project.
-
-```
-[Describe the required environment setup, including dependencies, configuration files, and setup scripts]
-```
 
 ### 1.5 Key Metrics Summary
 **MUST** provide a high-level summary of key project metrics.
