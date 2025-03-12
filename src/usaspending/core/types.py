@@ -108,9 +108,12 @@ AdapterResult = Optional[Union[str, int, float, bool, datetime, Decimal, List[An
 
 class ValidationSeverity(str, Enum):
     """Validation message severity levels."""
+    CRITICAL = "critical"
     ERROR = "error"
     WARNING = "warning"
     INFO = "info"
+    DEBUG = "debug"
+    TRACE = "trace"  # For extremely detailed logging
 
 class RuleType(str, Enum):
     """Types of validation rules."""

@@ -1,14 +1,14 @@
-"""Utilities for component creation and management."""
-from typing import Dict, Any, Optional, List, Type, TypeVar, Callable
+"""Component utility functions and helpers."""
+from typing import Dict, Any, Optional, Type, TypeVar, Generic, Callable
 import importlib
 import inspect
 import threading
 import abc
 from functools import wraps
 
-from .core.logging_config import get_logger
-from .core.exceptions import ConfigurationError
-from .core.config import ComponentConfig
+from usaspending.core.logging_config import get_logger
+from usaspending.core.exceptions import ConfigurationError
+from usaspending.core.config import ComponentConfig
 
 logger = get_logger(__name__)
 

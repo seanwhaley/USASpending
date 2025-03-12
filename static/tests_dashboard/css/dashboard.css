@@ -1,0 +1,111 @@
+.usa-card__container { 
+    height: 100%; 
+}
+
+.usa-card__body { 
+    display: flex; 
+    flex-direction: column; 
+    align-items: center; 
+}
+
+.metric-value { 
+    font-size: 2rem; 
+    font-weight: bold; 
+    margin: 1rem 0; 
+}
+
+.metric-value.success { color: #00a91c; }
+.metric-value.warning { color: #ffbe2e; }
+.metric-value.error { color: #d54309; }
+
+.loading { 
+    text-align: center; 
+    padding: 2rem; 
+    font-size: 1.2rem;
+}
+
+.loading::after {
+    content: "...";
+    animation: dots 1.5s steps(5, end) infinite;
+}
+
+@keyframes dots {
+    0%, 20% { content: "."; }
+    40% { content: ".."; }
+    60%, 100% { content: "..."; }
+}
+
+#dashboard-container.loaded .loading { display: none; }
+#dashboard-container:not(.loaded) .dashboard-content { display: none; }
+
+.dashboard-content {
+    display: none;
+}
+
+.debug-info { 
+    padding: 1rem; 
+    background: #f0f0f0; 
+    border: 1px solid #ccc; 
+    margin-top: 1rem;
+    font-family: monospace;
+    font-size: 0.8rem;
+    border-radius: 4px;
+    white-space: pre-wrap;
+}
+
+.sample-data-banner {
+    background-color: #ffecb5;
+    color: #1b1b1b;
+    text-align: center;
+    padding: 0.5rem;
+    font-weight: bold;
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+}
+
+.sample-data-badge {
+    display: inline-block;
+    background-color: #e41d3d;
+    color: white;
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+.file-coverage-progress {
+    height: 8px;
+    width: 100%;
+    background-color: #f0f0f0;
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 6px 0;
+}
+
+.file-coverage-progress-bar {
+    height: 100%;
+    background-color: #00a91c;
+}
+
+.file-coverage-progress-bar.warning {
+    background-color: #ffbe2e;
+}
+
+.file-coverage-progress-bar.error {
+    background-color: #d54309;
+}
+
+.validation-details {
+    margin-top: 1rem;
+}
+
+.validation-details .usa-alert {
+    margin-bottom: 1rem;
+}
+
+#coverage-summary-section canvas,
+#functional-coverage-section canvas {
+    max-height: 400px;
+}

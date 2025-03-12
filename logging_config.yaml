@@ -30,6 +30,24 @@ handlers:
     backupCount: 3
     encoding: utf8
 
+  critical_file:
+    class: logging.handlers.RotatingFileHandler
+    level: CRITICAL
+    formatter: standard
+    filename: output/logs/critical.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 3
+    encoding: utf8
+
+  error_file:
+    class: logging.handlers.RotatingFileHandler
+    level: ERROR
+    formatter: standard
+    filename: output/logs/error.log
+    maxBytes: 10485760  # 10MB
+    backupCount: 3
+    encoding: utf8
+
 root:
-  level: DEBUG  # Changed from INFO to DEBUG
-  handlers: [console, file, debug_file]
+  level: DEBUG  # Base level - will catch everything except TRACE which maps to DEBUG anyway
+  handlers: [console, file, debug_file, critical_file, error_file]

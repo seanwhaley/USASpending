@@ -10,6 +10,23 @@ from .types import (
 # Type variable for entity objects
 EntityT = TypeVar('EntityT', bound=DataclassProtocol)
 
+class IConfigurationProvider(Protocol):
+    """Interface for configuration management."""
+    @abstractmethod
+    def get_config(self, section: Optional[str] = None) -> Dict[str, Any]:
+        """Get configuration data, optionally from a specific section."""
+        pass
+        
+    @abstractmethod
+    def get_validation_errors(self) -> List[str]:
+        """Get configuration validation errors."""
+        pass
+        
+    @abstractmethod
+    def validate_config(self) -> bool:
+        """Validate loaded configuration."""
+        pass
+
 class IConfigurable(Protocol):
     """Interface for configurable components."""
     @abstractmethod
@@ -288,5 +305,6 @@ __all__ = [
     'ITransformer',
     'IRelationshipManager',
     'IValidationMediator',
-    'IEntitySerializer'
+    'IEntitySerializer',
+    'IConfigurationProvider'
 ]

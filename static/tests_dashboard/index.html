@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>USASpending Test Coverage Dashboard</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/css/uswds.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="css/dashboard.css" />
+</head>
+<body>
+    <div id="sample-data-banner" class="sample-data-banner" style="display: none;">
+        NOTICE: This dashboard is displaying SAMPLE DATA, not actual test results
+    </div>
+    
+    <a class="usa-skipnav" href="#main-content">Skip to main content</a>
+    
+    <div class="usa-overlay"></div>
+    
+    <!-- Header included from templates -->
+    <div id="header-container"></div>
+
+    <main id="main-content" class="usa-layout-docs usa-section">
+        <div id="dashboard-container" class="grid-container">
+            <div class="loading">Loading dashboard data</div>
+            
+            <div class="dashboard-content">
+                <div class="usa-alert usa-alert--info" role="status">
+                    <div class="usa-alert__body">
+                        <h4 class="usa-alert__heading">Dashboard Status</h4>
+                        <p class="usa-alert__text">Generated on <span id="generation-time"></span></p>
+                        <p id="data-source-info" class="usa-alert__text"></p>
+                    </div>
+                </div>
+                
+                <!-- Section content will be loaded from templates -->
+                <div id="coverage-summary-section"></div>
+                <div id="validation-results-section"></div>
+                <div id="module-coverage-section"></div>
+                <div id="functional-coverage-section"></div>
+                <div id="test-gaps-section"></div>
+                
+                <!-- Debug section -->
+                <section id="debug-info" class="padding-top-4 border-top border-base-lighter margin-top-4">
+                    <h2 class="usa-heading">Troubleshooting Information</h2>
+                    <button id="toggle-debug" class="usa-button">Show Loading Details</button>
+                    <div id="debug-container" class="debug-info" style="display: none;"></div>
+                </section>
+            </div>
+        </div>
+    </main>
+    
+    <!-- Footer included from templates -->
+    <div id="footer-container"></div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/uswds/3.7.1/js/uswds.min.js"></script>
+    <!-- Config file (auto-generated) -->
+    <script src="js/config.js"></script>
+    <!-- Core JavaScript files -->
+    <script src="js/data-loader.js"></script>
+    <script src="js/coverage-chart.js"></script>
+    <script src="js/validation-display.js"></script>
+    <script src="js/dashboard.js"></script>
+</body>
+</html>

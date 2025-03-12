@@ -7,6 +7,17 @@ import yaml
 from pathlib import Path
 from threading import Lock
 from typing import Optional
+from .types import ValidationSeverity
+
+# Mapping of ValidationSeverity to logging levels
+SEVERITY_TO_LOG_LEVEL = {
+    ValidationSeverity.CRITICAL: logging.CRITICAL,
+    ValidationSeverity.ERROR: logging.ERROR,
+    ValidationSeverity.WARNING: logging.WARNING,
+    ValidationSeverity.INFO: logging.INFO,
+    ValidationSeverity.DEBUG: logging.DEBUG,
+    ValidationSeverity.TRACE: logging.DEBUG  # Python logging doesn't have TRACE, map it to DEBUG
+}
 
 # Default basic logging format for early initialization
 DEFAULT_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
@@ -16,10 +27,16 @@ DEFAULT_LEVEL = logging.INFO
 _logging_initialized = False
 _logging_lock = Lock()
 
-def configure_logging(config_file: Optional[str] = None) -> None:
+def configure_logging(log_file: Optional[str] = None, 
+                     log_level: ValidationSeverity = ValidationSeverity.INFO,
+                     console_level: ValidationSeverity = ValidationSeverity.INFO, 
+                     config_file: Optional[str] = None) -> None:
     """Configure logging system.
     
     Args:
+        log_file: Optional path to log file
+        log_level: Log level for file handler
+        console_level: Log level for console handler
         config_file: Optional path to logging configuration file
     """
     global _logging_initialized
@@ -32,11 +49,35 @@ def configure_logging(config_file: Optional[str] = None) -> None:
             if config_file:
                 _configure_from_file(config_file)
             else:
-                # Basic configuration if no file provided
-                logging.basicConfig(
-                    format=DEFAULT_FORMAT,
-                    level=DEFAULT_LEVEL
-                )
+                # Setup handlers
+                handlers = []
+                formatter = logging.Formatter(DEFAULT_FORMAT)
+                
+                # Console handler
+                console = logging.StreamHandler(sys.stdout)
+                console.setLevel(SEVERITY_TO_LOG_LEVEL[console_level])
+                console.setFormatter(formatter)
+                handlers.append(console)
+                
+                # File handler if log_file specified
+                if log_file:
+                    # Ensure directory exists
+                    log_dir = os.path.dirname(log_file)
+                    if log_dir:
+                        os.makedirs(log_dir, exist_ok=True)
+                    
+                    file_handler = logging.FileHandler(log_file)
+                    file_handler.setLevel(SEVERITY_TO_LOG_LEVEL[log_level])
+                    file_handler.setFormatter(formatter)
+                    handlers.append(file_handler)
+                
+                # Configure root logger
+                root = logging.getLogger()
+                root.setLevel(min(SEVERITY_TO_LOG_LEVEL[log_level], 
+                                SEVERITY_TO_LOG_LEVEL[console_level]))
+                
+                for handler in handlers:
+                    root.addHandler(handler)
             
             _logging_initialized = True
             
