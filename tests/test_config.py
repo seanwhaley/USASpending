@@ -1,155 +1,156 @@
-"""Tests for configuration management functionality."""
 import pytest
-from usaspending.config import ConfigManager
-from usaspending.exceptions import ConfigurationError
+import os
+from unittest.mock import Mock, MagicMock
+from typing import Dict, Any
+from usaspending.config import ConfigurationProvider
+from usaspending.core.config import ComponentConfig
+from usaspending.core.interfaces import IConfigurable
+from usaspending.core.exceptions import ConfigurationError
+
+class MockConfigurable(IConfigurable):
+    def configure(self, config: ComponentConfig) -> None:
+        pass
 
 @pytest.fixture
-def test_config_data():
-    """Sample configuration for testing."""
+def sample_config() -> Dict[str, Any]:
     return {
-        "entities": {
-            "test_entity": {
-                "key_fields": ["id"],
-                "field_mappings": {
-                    "direct": {
-                        "id": {"field": "source_id"},
-                        "name": {"field": "source_name"}
-                    }
-                },
-                "entity_processing": {
-                    "enabled": True,
-                    "processing_order": 1
+        'paths': {
+            'data': 'data',
+            'output': 'output'
+        },
+        'components': {
+            'test_component': {
+                'class_path': 'test.MockComponent',
+                'settings': {
+                    'option1': 'value1'
                 }
             }
         },
-        "validation_groups": {
-            "amount_validation": {
-                "name": "Amount Validation",
-                "rules": ["compare:less_than_equal:maximum_amount"],
-                "enabled": True,
-                "error_level": "error"
-            }
-        },
-        "field_properties": {
-            "award_amount": {
-                "type": "decimal",
-                "validation": {
-                    "groups": ["amount_validation"],
-                    "dependencies": [
-                        {
-                            "type": "comparison",
-                            "target_field": "maximum_amount",
-                            "validation_rule": {
-                                "operator": "less_than_equal"
-                            }
-                        }
-                    ]
-                }
-            },
-            "maximum_amount": {
-                "type": "decimal"
-            }
-        }
-    }
-
-def test_load_config(create_temp_config_file, test_config_data):
-    """Test loading and validating the configuration."""
-    config_path = create_temp_config_file(test_config_data)
-    config_manager = ConfigManager(config_path)
-    
-    config = config_manager.get_config()
-    assert 'entities' in config
-    assert 'validation_groups' in config
-    assert 'field_properties' in config
-    
-    # Test validation manager initialization
-    assert config_manager.validation_manager is not None
-    assert len(config_manager.get_validation_rules('amount_validation')) == 1
-    assert len(config_manager.get_field_dependencies('award_amount')) == 1
-    assert 'maximum_amount' in config_manager.get_validation_order()
-
-def test_missing_config_file():
-    """Test handling of missing configuration file."""
-    with pytest.raises(ConfigurationError, match="Configuration file not found"):
-        ConfigManager("nonexistent_config.yaml")
-
-def test_missing_required_fields(create_temp_config_file):
-    """Test validation when required fields are missing."""
-    config = {
-        "entities": {
-            "test_entity": {
-                "field_mappings": {
-                    "direct": {
-                        "id": {"field": "source_id"}
+        'entities': {
+            'test_entity': {
+                'key_fields': ['id'],
+                'field_mappings': {
+                    'direct': {
+                        'target': 'source'
                     }
                 }
             }
         }
     }
-    
-    config_path = create_temp_config_file(config)
-    with pytest.raises(ConfigurationError, match="Configuration validation failed"):
-        ConfigManager(config_path)
 
-def test_invalid_validation_group(create_temp_config_file, test_config_data):
-    """Test validation with invalid validation group."""
-    config = dict(test_config_data)
-    config['validation_groups']['invalid_group'] = {
-        'name': 'Invalid Group',
-        'enabled': True  # Missing required 'rules' field
+@pytest.fixture
+def config_provider(tmp_path):
+    provider = ConfigurationProvider()
+    # Create a temporary config file
+    config_path = tmp_path / "test_config.yaml"
+    with open(config_path, 'w') as f:
+        f.write("""
+paths:
+  data: data
+  output: output
+components:
+  test_component:
+    class_path: test.MockComponent
+    settings:
+      option1: value1
+entities:
+  test_entity:
+    key_fields: [id]
+    field_mappings:
+      direct:
+        target: source
+""")
+    provider.load_config(str(config_path))
+    return provider
+
+def test_initialization():
+    provider = ConfigurationProvider()
+    assert not provider._initialized
+    assert len(provider._config) == 0
+    assert len(provider._validation_errors) == 0
+
+def test_load_config(config_provider):
+    assert config_provider._initialized
+    assert 'paths' in config_provider._config
+    assert 'components' in config_provider._config
+    assert 'entities' in config_provider._config
+
+def test_get_config_section(config_provider):
+    # Test dot notation access
+    result = config_provider.get_config_section('components.test_component.settings')
+    assert result == {'option1': 'value1'}
+    
+    # Test missing section
+    assert config_provider.get_config_section('nonexistent', 'default') == 'default'
+
+def test_validate_config(config_provider):
+    assert config_provider.validate_config()
+    assert len(config_provider.get_validation_errors()) == 0
+
+def test_validate_missing_required_sections(config_provider):
+    config_provider._config = {}  # Clear config
+    assert not config_provider.validate_config()
+    errors = config_provider.get_validation_errors()
+    assert any('Missing required section' in err for err in errors)
+
+def test_validate_entity_config(config_provider):
+    # Test invalid entity config
+    config_provider._config['entities']['invalid_entity'] = {
+        'field_mappings': 'not_a_dict'  # Should be a dict
     }
-    
-    config_path = create_temp_config_file(config)
-    with pytest.raises(ConfigurationError, match="Configuration validation failed"):
-        ConfigManager(config_path)
+    assert not config_provider.validate_config()
+    errors = config_provider.get_validation_errors()
+    assert any('Invalid field_mappings' in err for err in errors)
 
-def test_entity_config_access(create_temp_config_file, test_config_data):
-    """Test access to entity configurations."""
-    config_path = create_temp_config_file(test_config_data)
-    config_manager = ConfigManager(config_path)
-    
-    # Test valid entity access
-    entity_config = config_manager.get_entity_config('test_entity')
-    assert entity_config['key_fields'] == ['id']
-    
-    # Test invalid entity access
-    with pytest.raises(ConfigurationError, match="No configuration found for entity type"):
-        config_manager.get_entity_config('nonexistent')
-
-def test_validation_management(create_temp_config_file, test_config_data):
-    """Test validation management functionality."""
-    config_path = create_temp_config_file(test_config_data)
-    config_manager = ConfigManager(config_path)
-    
-    # Test validation rules
-    rules = config_manager.get_validation_rules('amount_validation')
-    assert len(rules) == 1
-    assert rules[0] == 'compare:less_than_equal:maximum_amount'
-    
-    # Test field dependencies
-    deps = config_manager.get_field_dependencies('award_amount')
-    assert len(deps) == 1
-    assert deps[0] == 'maximum_amount'
-    
-    # Test validation order
-    order = config_manager.get_validation_order()
-    assert 'maximum_amount' in order
-    assert 'award_amount' in order
-    assert order.index('maximum_amount') < order.index('award_amount')
-
-def test_system_config_access(create_temp_config_file, test_config_data):
-    """Test access to system configuration."""
-    config = dict(test_config_data)
-    config['system'] = {
-        'processing': {
-            'records_per_chunk': 100,
-            'max_workers': 4
-        }
+def test_component_dependency_validation(config_provider):
+    # Setup circular dependency
+    config_provider._config['components']['a'] = {
+        'class_path': 'test.Component',
+        'settings': {'dependencies': ['b']}
     }
+    config_provider._config['components']['b'] = {
+        'class_path': 'test.Component',
+        'settings': {'dependencies': ['a']}
+    }
+    config_provider._initialize_component_configs()
     
-    config_path = create_temp_config_file(config)
-    config_manager = ConfigManager(config_path)
+    assert not config_provider.validate_component_dependencies()
+    errors = config_provider.get_validation_errors()
+    assert any('Circular dependency' in err for err in errors)
+
+def test_register_and_configure_component(config_provider):
+    # Register a component
+    mock_component = MockConfigurable()
+    config_provider.register_component('test_component', MockConfigurable)
     
-    system_config = config_manager.get_system_config()
-    assert system_config['processing']['records_per_chunk'] == 100
-    assert system_config['processing']['max_workers'] == 4
+    # Configure it
+    config_provider.configure_component('test_component', mock_component)
+    
+    # Get its config
+    config = config_provider.get_component_config('test_component')
+    assert config is not None
+    assert config.settings == {'option1': 'value1'}
+
+@pytest.mark.parametrize('invalid_path', [
+    'nonexistent.json',
+    'config.txt'  # Unsupported format
+])
+def test_load_config_errors(invalid_path):
+    provider = ConfigurationProvider()
+    with pytest.raises(ConfigurationError):
+        provider.load_config(invalid_path)
+
+def test_entity_config_cache(config_provider):
+    # Get config first time
+    config1 = config_provider.get_entity_config('test_entity')
+    assert config1 is not None
+    
+    # Should return cached version
+    config2 = config_provider.get_entity_config('test_entity')
+    assert config2 is config1
+    
+    # Clear cache and get again
+    config_provider.clear_entity_config_cache()
+    config3 = config_provider.get_entity_config('test_entity')
+    assert config3 is not None
+    assert config3 is not config1

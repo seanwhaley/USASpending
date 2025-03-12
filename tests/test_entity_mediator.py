@@ -1,217 +1,187 @@
-"""Tests for entity mediator functionality."""
 import pytest
-from typing import Dict, Any, Optional, List, Generator
-from unittest.mock import Mock, patch
-
-from usaspending.entity_mediator import EntityMediator
-from usaspending.interfaces import (
-    IEntityFactory, IEntityStore, IValidationMediator
-)
-
-
-class MockEntityFactory(IEntityFactory):
-    """Mock entity factory for testing."""
-    
-    def __init__(self, should_create: bool = True) -> None:
-        self._should_create = should_create
-        self._created_entities: dict[str, Mock] = {}
-        
-    def create_entity(self, entity_type: str, data: Dict[str, Any]) -> Optional[Any]:
-        if not self._should_create:
-            return None
-        entity = Mock()
-        entity.entity_type = entity_type
-        entity.data = data
-        self._created_entities[entity_type] = entity
-        return entity
-
-    def get_entity_types(self) -> List[str]:
-        return list(self._created_entities.keys())
-
-
-class MockEntityStore(IEntityStore):
-    """Mock entity store for testing."""
-    
-    def __init__(self, should_save: bool = True) -> None:
-        self._should_save = should_save
-        self._entities: dict[str, tuple[str, Mock]] = {}
-        
-    def save(self, entity_type: str, entity: Any) -> str:
-        """Save entity and return its ID."""
-        if not self._should_save:
-            return ""
-        # Get entity type from the entity object for validation
-        if hasattr(entity, 'entity_type') and entity.entity_type != entity_type:
-            return ""
-            
-        entity_id = f"{entity_type}-{len(self._entities) + 1}"
-        self._entities[entity_id] = (entity_type, entity)
-        return entity_id
-        
-    def get(self, entity_type: str, entity_id: str) -> Optional[Any]:
-        stored = self._entities.get(entity_id)
-        if stored and stored[0] == entity_type:
-            return stored[1]
-        return None
-        
-    def delete(self, entity_type: str, entity_id: str) -> bool:
-        if entity_id in self._entities and self._entities[entity_id][0] == entity_type:
-            del self._entities[entity_id]
-            return True
-        return False
-    
-    def list(self, entity_type: str) -> Generator[Any, None, None]:
-        return (entity for _, (t, entity) in self._entities.items() if t == entity_type)
-    
-    def count(self, entity_type: str) -> int:
-        return sum(1 for _, (t, _) in self._entities.items() if t == entity_type)
-
-
-class MockValidationMediator(IValidationMediator):
-    """Mock validation mediator for testing."""
-    
-    def __init__(self, should_validate: bool = True) -> None:
-        self._should_validate = should_validate
-        self._errors: list[str] = []
-        self.validation_count = 0
-        
-    def validate_entity(self, entity_type: str, data: Dict[str, Any]) -> bool:
-        self.validation_count += 1
-        if not self._should_validate:
-            self._errors.append(f"Entity validation failed for {entity_type}")
-            return False
-        return True
-    
-    def validate_field(self, field_name: str, value: Any, entity_type: Optional[str] = None) -> bool:
-        self.validation_count += 1
-        if not self._should_validate:
-            self._errors.append(f"Field validation failed for {field_name}")
-            return False
-        return True
-    
-    def get_validation_errors(self) -> List[str]:
-        return self._errors.copy()
-
+from unittest.mock import Mock, MagicMock
+from usaspending.entity_mediator import USASpendingEntityMediator
+from usaspending.core.types import ValidationRule, EntityType, ComponentConfig
+from usaspending.core.exceptions import EntityError
+from usaspending.core.adapters import StringAdapter, MoneyAdapter, DateAdapter
 
 @pytest.fixture
-def mock_entity_factory() -> MockEntityFactory:
-    """Create entity factory mock."""
-    return MockEntityFactory()
-
-
-@pytest.fixture
-def mock_entity_store() -> MockEntityStore:
-    """Create entity store mock."""
-    return MockEntityStore()
-
-
-@pytest.fixture
-def mock_validation_mediator() -> MockValidationMediator:
-    """Create validation mediator mock."""
-    return MockValidationMediator()
-
+def mock_factory():
+    factory = Mock()
+    test_entity = {
+        'id': '1',
+        'amount': '$1000.00',
+        'date': '2024-01-01',
+        'description': 'Test entity'
+    }
+    factory.create_entity.return_value = test_entity
+    return factory
 
 @pytest.fixture
-def entity_mediator(mock_entity_factory: MockEntityFactory, 
-                   mock_entity_store: MockEntityStore,
-                   mock_validation_mediator: MockValidationMediator) -> EntityMediator:
-    """Create entity mediator with mocked dependencies."""
-    return EntityMediator(mock_entity_factory, mock_entity_store, mock_validation_mediator)
+def mock_store():
+    store = Mock()
+    store.save_entity.return_value = '1'
+    store.get_entity.return_value = {
+        'id': '1',
+        'amount': '$1000.00',
+        'date': '2024-01-01',
+        'description': 'Test entity'
+    }
+    return store
 
+@pytest.fixture
+def mock_mapper():
+    mapper = Mock()
+    mapper.map_entity.return_value = {
+        'id': '1',
+        'amount': '$1000.00',
+        'date': '2024-01-01',
+        'description': 'Test entity',
+        'mapped': True
+    }
+    return mapper
 
-def test_entity_mediator_initialization(entity_mediator: EntityMediator, 
-                                     mock_entity_factory: MockEntityFactory,
-                                     mock_entity_store: MockEntityStore, 
-                                     mock_validation_mediator: MockValidationMediator) -> None:
-    """Test mediator initialization."""
-    assert entity_mediator._factory == mock_entity_factory
-    assert entity_mediator._store == mock_entity_store
-    assert entity_mediator._validator == mock_validation_mediator
+@pytest.fixture
+def mediator(mock_factory, mock_store, mock_mapper):
+    return USASpendingEntityMediator(mock_factory, mock_store, mock_mapper)
 
+@pytest.fixture
+def configured_mediator(mediator):
+    config = ComponentConfig(
+        name='test_mediator',
+        settings={
+            'strict_mode': True,
+            'batch_size': 100,
+            'entities': {
+                'contract': {
+                    'adapters': {
+                        'amount': MoneyAdapter(),
+                        'date': DateAdapter(),
+                        'description': StringAdapter()
+                    },
+                    'validations': [
+                        {
+                            'field': 'amount',
+                            'rule': 'required',
+                            'message': 'Amount is required'
+                        },
+                        {
+                            'field': 'date',
+                            'rule': 'required',
+                            'message': 'Date is required'
+                        }
+                    ]
+                }
+            }
+        }
+    )
+    mediator.configure(config)
+    return mediator
 
-def test_create_entity_success(entity_mediator: EntityMediator) -> None:
-    """Test successful entity creation."""
-    data = {"id": "test1", "name": "Test Entity"}
-    entity = entity_mediator.create_entity("test_type", data)
-    assert entity is not None
-    assert entity.entity_type == "test_type"
-    assert entity.data == data
+def test_mediator_initialization(mediator):
+    assert mediator._factory is not None
+    assert mediator._store is not None
+    assert mediator._mapper is not None
+    assert mediator._initialized is False
+    assert mediator._strict_mode is False
+    assert mediator._batch_size == 1000
 
+def test_mediator_configuration(configured_mediator):
+    assert configured_mediator._initialized is True
+    assert configured_mediator._strict_mode is True
+    assert configured_mediator._batch_size == 100
+    assert 'contract' in configured_mediator._entity_configs
 
-def test_create_entity_validation_failure(entity_mediator: EntityMediator, 
-                                        mock_validation_mediator: MockValidationMediator) -> None:
-    """Test entity creation with validation failure."""
-    mock_validation_mediator._should_validate = False
-    data = {"id": "test1"}
-    entity = entity_mediator.create_entity("test_type", data)
-    assert entity is None
-    assert len(mock_validation_mediator.get_validation_errors()) > 0
+def test_add_validation_rule(mediator):
+    rule = ValidationRule(
+        rule_type='required',
+        field_name='amount',
+        parameters={},
+        message='Amount is required',
+        enabled=True
+    )
+    mediator.add_validation_rule(EntityType('contract'), rule)
+    assert len(mediator.get_validation_rules(EntityType('contract'))) == 1
 
+def test_process_entity_success(configured_mediator):
+    entity_data = {
+        'id': '1',
+        'amount': '$1000.00',
+        'date': '2024-01-01',
+        'description': 'Test entity'
+    }
+    entity_id = configured_mediator.process_entity(EntityType('contract'), entity_data)
+    assert entity_id == '1'
+    assert configured_mediator.get_errors(EntityType('contract')) == []
 
-def test_create_entity_factory_failure(entity_mediator: EntityMediator, 
-                                     mock_entity_factory: MockEntityFactory) -> None:
-    """Test entity creation with factory failure."""
-    mock_entity_factory._should_create = False
-    data = {"id": "test1"}
-    entity = entity_mediator.create_entity("test_type", data)
-    assert entity is None
+def test_process_entity_validation_failure(configured_mediator):
+    entity_data = {
+        'id': '1',
+        'description': 'Test entity'
+        # Missing required amount and date
+    }
+    with pytest.raises(EntityError):
+        configured_mediator.process_entity(EntityType('contract'), entity_data)
+    assert len(configured_mediator.get_errors(EntityType('contract'))) > 0
 
-
-def test_store_entity_success(entity_mediator: EntityMediator) -> None:
-    """Test successful entity storage."""
-    data = {"id": "test1"}
-    entity = entity_mediator.create_entity("test_type", data)
-    assert entity is not None
+def test_batch_processing(configured_mediator):
+    entities = [
+        {
+            'id': str(i),
+            'amount': f'${1000 * i}.00',
+            'date': '2024-01-01',
+            'description': f'Test entity {i}'
+        }
+        for i in range(1, 4)
+    ]
     
-    entity_id = entity_mediator.store_entity(entity)  # Remove entity_type argument
-    assert entity_id != ""
+    results = configured_mediator.process_batch(EntityType('contract'), entities)
+    assert len(results) == 3
+    assert all(id is not None for id in results)
+
+def test_cleanup(configured_mediator):
+    configured_mediator.cleanup()
+    configured_mediator._store.cleanup.assert_called_once()
+
+def test_invalid_configuration():
+    mediator = USASpendingEntityMediator(Mock(), Mock(), Mock())
+    invalid_config = ComponentConfig(
+        name='test_mediator',
+        settings={
+            # Missing required settings
+        }
+    )
+    with pytest.raises(EntityError):
+        mediator.configure(invalid_config)
+
+def test_validation_rule_processing(configured_mediator):
+    # Test validation with custom rule
+    rule = ValidationRule(
+        rule_type='range',
+        field_name='amount',
+        parameters={'min': 0, 'max': 10000},
+        message='Amount must be between {min} and {max}',
+        enabled=True
+    )
+    configured_mediator.add_validation_rule(EntityType('contract'), rule)
     
-    stored_entity = entity_mediator.get_entity("test_type", entity_id)
-    assert stored_entity is not None
-    assert stored_entity.data == data
-
-
-def test_store_entity_failure(entity_mediator: EntityMediator, 
-                            mock_entity_store: MockEntityStore) -> None:
-    """Test entity storage failure."""
-    mock_entity_store._should_save = False
-    data = {"id": "test1"}
-    entity = entity_mediator.create_entity("test_type", data)
-    assert entity is not None
+    # Valid entity
+    valid_entity = {
+        'id': '1',
+        'amount': '$5000.00',
+        'date': '2024-01-01',
+        'description': 'Test entity'
+    }
+    entity_id = configured_mediator.process_entity(EntityType('contract'), valid_entity)
+    assert entity_id is not None
     
-    entity_id = entity_mediator.store_entity(entity)  # Remove entity_type argument
-    assert entity_id == ""
-
-
-def test_validation_performance(entity_mediator: EntityMediator,
-                              mock_validation_mediator: MockValidationMediator) -> None:
-    """Test validation performance tracking."""
-    initial_count = mock_validation_mediator.validation_count
-    
-    # Create and validate an entity
-    data = {"id": "test1"}
-    entity = entity_mediator.create_entity("test_type", data)
-    assert entity is not None
-    
-    # Verify validation was performed
-    assert mock_validation_mediator.validation_count > initial_count
-
-
-def test_entity_type_validation(entity_mediator: EntityMediator) -> None:
-    """Test entity type validation."""
-    data = {"id": "test1"}
-    
-    # Valid entity type
-    entity = entity_mediator.create_entity("test_type", data)
-    assert entity is not None
-    
-    # Empty entity type should raise ValueError
-    with pytest.raises(ValueError):
-        entity_mediator.create_entity("", data)
-
-
-def test_data_validation(entity_mediator: EntityMediator) -> None:
-    """Test data validation."""
-    # Empty data should raise ValueError
-    with pytest.raises(ValueError):
-        entity_mediator.create_entity("test_type", {})
+    # Invalid entity
+    invalid_entity = {
+        'id': '2',
+        'amount': '$15000.00',  # Exceeds max
+        'date': '2024-01-01',
+        'description': 'Test entity'
+    }
+    with pytest.raises(EntityError):
+        configured_mediator.process_entity(EntityType('contract'), invalid_entity)
+    assert any('Amount must be between' in err for err in configured_mediator.get_errors(EntityType('contract')))
