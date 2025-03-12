@@ -1,5 +1,3 @@
-testing
-
 # USASpending System Architecture
 
 ## Tools
