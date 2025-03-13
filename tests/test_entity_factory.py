@@ -1,9 +1,9 @@
 import pytest
 from datetime import datetime
 from decimal import Decimal
-from usaspending.entity_factory import EntityFactory
-from usaspending.core.types import EntityType, ComponentConfig, TransformationRule
-from usaspending.core.exceptions import EntityError
+from src.usaspending.entity_factory import EntityFactory
+from src.usaspending.core.types import EntityType, ComponentConfig, TransformationRule
+from src.usaspending.core.exceptions import EntityError
 
 @pytest.fixture
 def factory():

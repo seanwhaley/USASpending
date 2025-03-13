@@ -2,10 +2,10 @@ import pytest
 import os
 from unittest.mock import Mock, MagicMock
 from typing import Dict, Any
-from usaspending.config import ConfigurationProvider
-from usaspending.core.config import ComponentConfig
-from usaspending.core.interfaces import IConfigurable
-from usaspending.core.exceptions import ConfigurationError
+from src.usaspending.config import ConfigurationProvider
+from src.usaspending.core.config import ComponentConfig
+from src.usaspending.core.interfaces import IConfigurable
+from src.usaspending.core.exceptions import ConfigurationError
 
 class MockConfigurable(IConfigurable):
     def configure(self, config: ComponentConfig) -> None:

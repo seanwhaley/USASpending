@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock
 
-from tools.reports import (
+from src.tools.reports import (
     ValidationReportGenerator,
     DashboardGenerator
 )
@@ -129,7 +129,7 @@ def test_validation_report_thresholds(tmp_path):
     quality_data = {'overall_quality_score': 75.0}
     gap_data = {'gaps': []}
     
-    with patch('tools.common.FileHelper.load_json_file') as mock_load:
+    with patch('src.tools.common.FileHelper.load_json_file') as mock_load:
         mock_load.side_effect = [coverage_data, quality_data, gap_data]
         
         report = generator.generate_report()

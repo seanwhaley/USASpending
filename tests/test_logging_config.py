@@ -3,7 +3,7 @@ import pytest
 import logging
 import os
 import tempfile
-from usaspending.core.logging_config import (
+from src.usaspending.core.logging_config import (
     configure_logging,
     get_logger,
     LogLevel

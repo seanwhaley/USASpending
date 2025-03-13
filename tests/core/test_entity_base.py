@@ -1,14 +1,14 @@
 import pytest
 from typing import Dict, Any, Optional
-from usaspending.core.entity_base import (
+from src.usaspending.core.entity_base import (
     BaseEntityFactory,
     BaseEntityStore,
     BaseEntityMapper,
     BaseEntityMediator,
     EntityData
 )
-from usaspending.core.types import EntityType
-from usaspending.core.exceptions import EntityError
+from src.usaspending.core.types import EntityType
+from src.usaspending.core.exceptions import EntityError
 
 class TestEntityFactory(BaseEntityFactory):
     def create_entity(self, entity_type: EntityType, data: Dict[str, Any]) -> Optional[EntityData]:

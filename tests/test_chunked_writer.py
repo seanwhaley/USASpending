@@ -2,10 +2,10 @@ import pytest
 from dataclasses import dataclass
 from typing import Dict, Any, List
 import time
-from usaspending.chunked_writer import ChunkedWriter, AsyncChunkedWriter
-from usaspending.core.types import EntityType, EntityData
-from usaspending.core.interfaces import IEntityStore
-from usaspending.core.entity_serializer import IEntitySerializer
+from src.usaspending.chunked_writer import ChunkedWriter, AsyncChunkedWriter
+from src.usaspending.core.types import EntityType, EntityData
+from src.usaspending.core.interfaces import IEntityStore
+from src.usaspending.core.entity_serializer import IEntitySerializer
 
 @dataclass
 class EntityForTest:

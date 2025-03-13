@@ -2,7 +2,7 @@ import pytest
 from typing import Dict, Any, Optional
 from functools import wraps
 import logging
-from usaspending.core.utils import (
+from src.usaspending.core.utils import (
     safe_operation,
     implements,
     singleton,
@@ -11,7 +11,7 @@ from usaspending.core.utils import (
     retry_operation,
     timing_decorator
 )
-from usaspending.core.exceptions import ConfigurationError
+from src.usaspending.core.exceptions import ConfigurationError
 
 # Test class for singleton pattern
 @singleton

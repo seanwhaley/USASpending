@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from decimal import Decimal
 from src.process_transactions import process_transactions, setup_validation, setup_entity_mediator
-from usaspending.core.adapters import MoneyAdapter, DateAdapter, StringAdapter
+from src.usaspending.core.adapters import MoneyAdapter, DateAdapter, StringAdapter
 
 @pytest.fixture
 def sample_config():

@@ -1,11 +1,11 @@
 import pytest
 from typing import Dict, Any, List
-from usaspending.core.fields import (
+from src.usaspending.core.fields import (
     FieldDefinition,
     FieldDefinitionLoader,
     FieldGroup
 )
-from usaspending.core.types import (
+from src.usaspending.core.types import (
     FieldType,
     ValidationRule,
     RuleType,

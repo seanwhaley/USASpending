@@ -1,15 +1,15 @@
 import pytest
 from typing import Dict, Any, Optional
-from usaspending.core.component_utils import (
+from src.usaspending.core.component_utils import (
     implements_interface,
     implements,
     create_component,
     create_component_from_config,
     create_components_from_config
 )
-from usaspending.core.interfaces import IConfigurable
-from usaspending.core.config import ComponentConfig
-from usaspending.core.exceptions import ConfigurationError
+from src.usaspending.core.interfaces import IConfigurable
+from src.usaspending.core.config import ComponentConfig
+from src.usaspending.core.exceptions import ConfigurationError
 
 # Test interfaces and implementations
 class ITestComponent:

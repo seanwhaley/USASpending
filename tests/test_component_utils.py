@@ -1,7 +1,7 @@
 import pytest
 from typing import Protocol
 from abc import ABC, abstractmethod
-from usaspending.component_utils import (
+from usaspending.core.component_utils import (
     implements_interface,
     implements,
     create_component,

@@ -2,13 +2,13 @@ import pytest
 from typing import Dict, Any
 from pathlib import Path
 import yaml
-from usaspending.core.config import (
+from src.usaspending.core.config import (
     ComponentConfig,
     ConfigurationProvider,
     ConfigRegistry
 )
-from usaspending.core.exceptions import ConfigurationError
-from usaspending.core.interfaces import IConfigurable
+from src.usaspending.core.exceptions import ConfigurationError
+from src.usaspending.core.interfaces import IConfigurable
 
 class MockConfigurable(IConfigurable):
     def __init__(self):

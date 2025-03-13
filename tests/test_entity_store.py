@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import Mock, MagicMock
-from usaspending.entity_store import EntityStore
-from usaspending.core.types import EntityType, ComponentConfig
-from usaspending.core.exceptions import StorageError
-from usaspending.core.storage import SQLiteStorage, FileSystemStorage
+from src.usaspending.entity_store import EntityStore
+from src.usaspending.core.types import EntityType, ComponentConfig
+from src.usaspending.core.exceptions import StorageError
+from src.usaspending.core.storage import SQLiteStorage, FileSystemStorage
 
 @pytest.fixture
 def store():

@@ -3,10 +3,10 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from tools.run_tests import run_test_suite
-from tools.generate_coverage import generate_coverage_reports
-from tools.analyze_test_quality import analyze_test_quality
-from tools.validate_coverage import validate_coverage_thresholds
+from src.tools.run_tests import run_test_suite
+from src.tools.generate_coverage import generate_coverage_reports
+from src.tools.analyze_test_quality import analyze_test_quality
+from src.tools.validate_coverage import validate_coverage_thresholds
 
 def test_run_test_suite():
     """Test test suite runner."""
@@ -37,7 +37,7 @@ def test_generate_coverage_reports(tmp_path):
 
 def test_analyze_test_quality():
     """Test test quality analysis."""
-    with patch('tools.analyzers.TestQualityAnalyzer') as MockAnalyzer:
+    with patch('src.tools.analyzers.TestQualityAnalyzer') as MockAnalyzer:
         mock_analyzer = MagicMock()
         MockAnalyzer.return_value = mock_analyzer
         
@@ -51,7 +51,7 @@ def test_analyze_test_quality():
 
 def test_validate_coverage_thresholds():
     """Test coverage threshold validation."""
-    with patch('tools.reports.ValidationReportGenerator') as MockGenerator:
+    with patch('src.tools.reports.ValidationReportGenerator') as MockGenerator:
         mock_generator = MagicMock()
         MockGenerator.return_value = mock_generator
         
