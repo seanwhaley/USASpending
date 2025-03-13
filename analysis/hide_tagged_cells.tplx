@@ -1,0 +1,13 @@
+{% extends 'article.tplx' %}
+
+{% block input_group %}
+{% if 'remove_input' not in cell.metadata.tags %}
+    {{ super() }}
+{% endif %}
+{% endblock input_group %}
+
+{% block codecell %}
+{% if 'remove_cell' not in cell.metadata.tags %}
+    {{ super() }}
+{% endif %}
+{% endblock codecell %}

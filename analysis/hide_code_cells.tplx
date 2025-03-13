@@ -1,0 +1,16 @@
+% Default to the notebook output style
+((* extends 'article.tplx' *))
+
+% Ignore the input cells with specific tags
+((* block input scoped *))
+    ((* if not cell.metadata.get('tags', []) or not (('remove_cell' in cell.metadata.tags) or ('remove_input' in cell.metadata.tags)) *))
+        ((( super() )))
+    ((* endif *))
+((* endblock input *))
+
+% Ignore entire cells with remove_cell tag
+((* block codecell scoped *))
+    ((* if not cell.metadata.get('tags', []) or not ('remove_cell' in cell.metadata.tags) *))
+        ((( super() )))
+    ((* endif *))
+((* endblock codecell *))
