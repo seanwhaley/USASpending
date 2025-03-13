@@ -2,7 +2,7 @@
 import os
 import pytest
 import tempfile
-from usaspending.core.file_utils import (
+from src.usaspending.core.file_utils import (
     ensure_directory,
     safe_file_write,
     chunked_file_read,

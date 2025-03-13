@@ -2,7 +2,7 @@ import pytest
 from decimal import Decimal
 from datetime import datetime
 from typing import Any, Dict
-from usaspending.adapters import (
+from src.usaspending.core.adapters import (
     BaseAdapter,
     StringAdapter,
     IntegerAdapter,
@@ -10,7 +10,7 @@ from usaspending.adapters import (
     DateAdapter,
     BooleanAdapter
 )
-from usaspending.types import TransformationRule, FieldType
+from src.usaspending.core.types import TransformationRule, FieldType
 
 class TestAdapter(BaseAdapter):
     """Test implementation of BaseAdapter."""

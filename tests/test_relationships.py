@@ -1,7 +1,7 @@
 """Tests for relationship management functionality."""
 import pytest
-from usaspending.core.relationships import RelationshipManager
-from usaspending.core.types import EntityType, RelationType
+from src.usaspending.core.relationships import RelationshipManager
+from src.usaspending.core.types import EntityType, RelationType
 
 @pytest.fixture
 def relationship_manager():

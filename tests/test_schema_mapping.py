@@ -1,8 +1,8 @@
 """Tests for schema mapping functionality."""
 import pytest
-from usaspending.core.schema_mapping import SchemaMapping
-from usaspending.core.transformers import TransformerFactory
-from usaspending.core.types import TransformationRule, FieldType
+from src.usaspending.core.schema_mapping import SchemaMapping
+from src.usaspending.core.transformers import TransformerFactory
+from src.usaspending.core.types import TransformationRule, FieldType
 
 @pytest.fixture
 def transformer_factory():

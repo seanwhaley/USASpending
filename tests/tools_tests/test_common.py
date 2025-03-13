@@ -6,7 +6,7 @@ import pytest
 from pathlib import Path
 from unittest.mock import patch, mock_open
 
-from tools.common import (
+from src.usaspending.tools.common import (
     detect_environment,
     DirectoryHelper,
     FileHelper,

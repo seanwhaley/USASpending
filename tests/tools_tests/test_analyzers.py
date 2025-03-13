@@ -2,10 +2,10 @@
 
 import pytest
 
-from tools.analyzers.coverage_analyzer import CoverageAnalyzer
-from tools.analyzers.quality_analyzer import TestQualityAnalyzer
-from tools.analyzers.gap_analyzer import TestGapAnalyzer
-from tools.analyzers.functional_analyzer import FunctionalCoverageAnalyzer
+from src.tools.analyzers.coverage_analyzer import CoverageAnalyzer
+from src.tools.analyzers.quality_analyzer import TestQualityAnalyzer
+from src.tools.analyzers.gap_analyzer import TestGapAnalyzer
+from src.tools.analyzers.functional_analyzer import FunctionalCoverageAnalyzer
 
 @pytest.fixture
 def coverage_xml():

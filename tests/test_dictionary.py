@@ -1,9 +1,9 @@
 import pytest
 from pathlib import Path
 from typing import Dict, Any, Set
-from usaspending.dictionary import Dictionary
-from usaspending.core.fields import FieldDefinition
-from usaspending.core.types import ValidationRule, RuleType, ValidationSeverity, FieldType
+from src.usaspending.dictionary import Dictionary
+from src.usaspending.core.fields import FieldDefinition
+from src.usaspending.core.types import ValidationRule, RuleType, ValidationSeverity, FieldType
 
 @pytest.fixture
 def sample_config() -> Dict[str, Any]:

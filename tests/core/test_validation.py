@@ -1,12 +1,12 @@
 import pytest
 from typing import Dict, Any
-from usaspending.core.validation import (
+from src.usaspending.core.validation import (
     BaseValidator,
     ValidationService,
     RuleSet,
     ValidationResult
 )
-from usaspending.core.types import (
+from src.usaspending.core.types import (
     ValidationRule,
     RuleType,
     ValidationSeverity
